@@ -33,7 +33,7 @@
     PrivateData = @{
         PSData = @{
             Tags         = @('logs', 'parser', 'analyzer', 'monitoring', 'cross-platform', 'PowerShell')
-            ProjectUri   = 'https://github.com/yourusername/SmartLogAnalyzer'
+            ProjectUri   = 'https://github.com/williebonnerjr/SLAnalyzer'
             LicenseUri   = 'https://opensource.org/licenses/MIT'
             ReleaseNotes = 'Initial release with Windows/Linux support, UI (Windows only), and export options.'
         }
