@@ -4,7 +4,7 @@
     GUID              = '9f0f09d3-b15c-4a9c-b01d-3d19d06e6f21'
     Author            = 'Willie Bonner'
     CompanyName       = 'Independent'
-    Description       = 'SmartLogAnalyzer helps sysadmins and developers parse and analyze logs intelligently.'
+    Description       = 'SmartLogAnalyzer helps sysadmins and developers parse and analyze logs intelligently across platforms with optional GUI.'
     PowerShellVersion = '7.0'
     CompatiblePSEditions = @('Core', 'Desktop')
 
@@ -21,7 +21,7 @@
         'Public\Get-LogSummary.ps1',
         'Public\Invoke-SmartAnalyzer.ps1',
         'Public\Show-LogAnalyzerUI.ps1',
-        'Private\Analyzers.Helpers.ps1',
+        'Private\Analyzers.Helper.ps1',
         'Private\Convert-Timestamp.ps1',
         'Private\Format-LogEntry.ps1',
         'GUI\Assets\Slanalyzer.ico',
@@ -32,10 +32,11 @@
 
     PrivateData = @{
         PSData = @{
-            Tags         = @('logs', 'parser', 'analyzer', 'monitoring', 'cross-platform', 'PowerShell')
+            Tags         = @('logs', 'parser', 'analyzer', 'monitoring', 'cross-platform', 'PowerShell', 'ETL', 'journalctl', 'GUI')
             ProjectUri   = 'https://github.com/williebonnerjr/SLAnalyzer'
             LicenseUri   = 'https://opensource.org/licenses/MIT'
-            ReleaseNotes = 'Initial release with Windows/Linux support, UI (Windows only), and export options.'
+            IconUri      = 'https://raw.githubusercontent.com/williebonnerjr/SLAnalyzer/main/GUI/Assets/slanalyzer.ico'  # optional
+            ReleaseNotes = 'Initial release: cross-platform log support (ETL + journalctl), auto-summarization, export to CSV/JSON, and optional Windows GUI.'
         }
     }
 }
