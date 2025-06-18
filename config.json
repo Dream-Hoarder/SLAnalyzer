@@ -1,0 +1,25 @@
+{
+  "Defaults": {
+    "ExportFormat": "CSV",
+    "SortOrder": "Forward",
+    "IncludeKeywords": [],
+    "ExcludeKeywords": []
+  },
+  "Paths": {
+    "WindowsDefaultLogPath": "C:\\Logs",
+    "LinuxDefaultLogPath": "/var/log"
+  },
+  "UI": {
+    "Font": "Segoe UI",
+    "FontSize": 10,
+    "ThemeColor": "#1E90FF"
+  },
+  "Summary": {
+    "ShowErrorCount": true,
+    "ShowWarningCount": true,
+    "ShowInfoCount": true,
+    "ShowDebugCount": true,
+    "ShowFatalCount": true,
+    "ShowOtherCount": false
+  }
+}
