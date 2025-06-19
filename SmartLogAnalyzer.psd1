@@ -22,6 +22,7 @@
         'Public\Invoke-SmartAnalyzer.ps1',
         'Public\Show-LogAnalyzerUI.ps1',
         'Private\Analyzers.Helper.ps1',
+        'Private\Protect-LogEntry.ps1',
         'Private\Convert-Timestamp.ps1',
         'Private\Format-LogEntry.ps1',
         'GUI\Assets\Slanalyzer.ico',

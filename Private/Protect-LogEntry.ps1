@@ -1,29 +1,41 @@
-# SmartLogAnalyzer.psm1
+function Protect-LogEntry {
+    [CmdletBinding()]
+    param (
+        [pscustomobject]$Entry,
+        [ref]$RedactionLog
+    )
 
-# Private function files
-. "$PSScriptRoot\Private\Analyzers.Helper.ps1"
-. "$PSScriptRoot\Private\Convert-Timestamp.ps1"
-. "$PSScriptRoot\Private\Format-LogEntry.ps1"
-. "$PSScriptRoot\Private\Export-LogReport.ps1"
-. "$PSScriptRoot\Private\Protect-LogEntry.ps1"
+    $copy = $Entry.PSObject.Copy()
 
+    # Redact username
+    if ($copy.UserName -match '\S') {
+        $RedactionLog.Value.Add("UserName: $($copy.UserName)")
+        $copy.UserName = '[REDACTED]'
+    }
 
-# Public function files
-. "$PSScriptRoot\Public\Get-LogEntries.ps1"
-. "$PSScriptRoot\Public\Get-LogSummary.ps1"
-. "$PSScriptRoot\Public\Invoke-SmartAnalyzer.ps1"
+    # Redact IP addresses
+    if ($copy.Message -match '\b\d{1,3}(\.\d{1,3}){3}\b') {
+        $ipMatch = [regex]::Match($copy.Message, '\b\d{1,3}(\.\d{1,3}){3}\b')
+        if ($ipMatch.Success) {
+            $RedactionLog.Value.Add("IP Address: $($ipMatch.Value)")
+            $copy.Message = $copy.Message -replace $ipMatch.Value, '[REDACTED]'
+        }
+    }
 
-# Conditionally load UI only on Windows
-if ($IsWindows) {
-    . "$PSScriptRoot\Public\Show-LogAnalyzerUI.ps1"
+    # Redact email
+    if ($copy.Email -match '\b\S+@\S+\.\S+\b') {
+        $RedactionLog.Value.Add("Email: $($copy.Email)")
+        $copy.Email = '[REDACTED]'
+    }
+
+    return $copy
 }
-
 
 # SIG # Begin signature block
 # MIIFsAYJKoZIhvcNAQcCoIIFoTCCBZ0CAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBDqa9aKEVBR2GC
-# oJV3/KyQg3LAmzsNwC6bN1Of5B06QqCCAxwwggMYMIICAKADAgECAhAVMtqhUrdy
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCAbMMOgAq/Bj4Sm
+# 1SM/3EKqkm0nwoq45r4IeYYzs/5ooaCCAxwwggMYMIICAKADAgECAhAVMtqhUrdy
 # mkjK9MI220b3MA0GCSqGSIb3DQEBCwUAMCQxIjAgBgNVBAMMGVNtYXJ0TG9nQW5h
 # bHl6ZXIgRGV2IENlcnQwHhcNMjUwNjE4MjIxMTA3WhcNMjYwNjE4MjIzMTA3WjAk
 # MSIwIAYDVQQDDBlTbWFydExvZ0FuYWx5emVyIERldiBDZXJ0MIIBIjANBgkqhkiG
@@ -44,11 +56,11 @@ if ($IsWindows) {
 # IERldiBDZXJ0AhAVMtqhUrdymkjK9MI220b3MA0GCWCGSAFlAwQCAQUAoIGEMBgG
 # CisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcNAQkDMQwGCisGAQQBgjcC
 # AQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwLwYJKoZIhvcNAQkEMSIE
-# IBSP8w7gH1ZWBz0sruFLP8Cgc/L7gPKj8AQ3iTnyjudHMA0GCSqGSIb3DQEBAQUA
-# BIIBALYVbkndbUcF1lq3eemKFvNsQK02pGb04QjmvarqQ6ke9IqxnplwigtS/ghz
-# +AB1cNsfteq/Us6eIgacDcrp+2+/04skgn69lAHqhSia5/k9YTlwI0eb3pfHfiQt
-# dYx0GKhCDNIGFA6fqDnYXKFegzrhTxi8UpH+dDAF9BBCT52YOd3TX9YhM9GCMH28
-# r2EuVmoUv/t4Nq2GYdGW6Djpcrb0usx46oaiHK2y+d5dZ2/R6cJYBEZ2viQ2MABV
-# F7Bmg+U4jaBnF1khWH816/MBUyuXss0kf/1zbT62s5evqTXHWoUnipQ42BA2Mr65
-# 9Iz6hExPXwg5wwtaQbAQIRsSL5M=
+# IFalnt4sliN5g5UetbtPW1ncH/UKFLY4zTD1dSsv3OCJMA0GCSqGSIb3DQEBAQUA
+# BIIBALAu0cbuFCwiSFCn7/aVvwV9Mbx+mgqWmTX/Vw9PYMVrd/Tf7xaIKfUD8Jfj
+# AuDuNFXA/iCXBJCC3htVE6He5Q+nyXqJOj9dsAB90bEkjzANIugsRAkuOFiBGy/e
+# yVUda+SxWvYdSAK6TCEJOVByPOUSrRJETmALQndTe0prFu7dSpJFqnz1aa1LQDY8
+# 9tAo4eyD4JtP0SAa9V6gd102O6ZmcY+c6+lUVXFhD5J5WQOF/syL5jRmFGYvCIbh
+# h5F9PCmthfeNLmR71qbWBXro1Lt+B6eStIysWXEYMI4wJ0J0bcjKkgvcZi6kvGy7
+# W/q38nkqzB5zClGdPOZ+9CjvmTo=
 # SIG # End signature block

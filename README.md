@@ -19,6 +19,14 @@
 
 ## 🚀 Installation
 
+# SmartLogAnalyzer
+
+[![PowerShell Gallery](https://img.shields.io/powershellgallery/v/SmartLogAnalyzer.svg?style=flat-square)](https://www.powershellgallery.com/packages/SmartLogAnalyzer)
+[![Downloads](https://img.shields.io/powershellgallery/dt/SmartLogAnalyzer.svg?style=flat-square)](https://www.powershellgallery.com/packages/SmartLogAnalyzer)
+
+SmartLogAnalyzer helps sysadmins and developers parse and analyze logs intelligently across platforms with optional GUI.
+
+## Install via PowerShell
 ```powershell
 Install-Module -Name SmartLogAnalyzer -Scope CurrentUser
 
