@@ -1,55 +1,151 @@
-function Format-LogEntry {
+function Get-SystemLogs {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory)]
-        [string]$Line,
+        [ValidateSet("System", "Application", "Security", "All", "Custom")]
+        [string]$LogType = "System",
 
-        [string[]]$CustomPatterns = @()
+        [datetime]$StartTime = (Get-Date).AddHours(-1),
+        [datetime]$EndTime = (Get-Date),
+
+        [string]$CustomPath,
+
+        [switch]$Colorize,
+        [switch]$AttentionOnly,
+
+        [string]$OutputPath
     )
 
-    # Try custom regex rules from config or input
-    foreach ($pattern in $CustomPatterns) {
-        if ($Line -match $pattern) {
-            return [PSCustomObject]@{
-                Timestamp = if ($matches['Time']) { $matches['Time'] } else { $null }
-                Level     = if ($matches['Level']) { $matches['Level'] } else { 'Info' }
-                Provider  = if ($matches['Source']) { $matches['Source'] } else { 'Unknown' }
-                Message   = if ($matches['Message']) { $matches['Message'] } else { $Line }
+    $logs = @()
+    $runningOnWindows = $false
+    $runningOnLinux = $false
+
+    if ($IsWindows) {
+        $runningOnWindows = $true
+    } elseif ($env:OSTYPE -match "linux" -or ($env:HOME -and -not $IsWindows)) {
+        $runningOnLinux = $true
+    }
+
+    if ($runningOnWindows) {
+        Write-Verbose "Fetching logs on Windows..."
+
+        try {
+            if ($LogType -eq "Custom" -and $CustomPath -and (Test-Path $CustomPath)) {
+                Write-Verbose "Reading from .evtx file: $CustomPath"
+                $logs = Get-WinEvent -Path $CustomPath -ErrorAction Stop
+            } else {
+                $filter = @{
+                    LogName   = if ($LogType -eq "All") { @("System", "Application", "Security") } else { $LogType }
+                    StartTime = $StartTime
+                    EndTime   = $EndTime
+                }
+                $logs = Get-WinEvent -FilterHashtable $filter -ErrorAction Stop
+            }
+        } catch {
+            Write-Warning "Get-WinEvent failed: $_. Trying Get-EventLog fallback..."
+            if ($LogType -in @("System", "Application", "Security")) {
+                $logs = Get-EventLog -LogName $LogType -After $StartTime -Before $EndTime -ErrorAction Stop
+            } else {
+                throw "Failed to retrieve logs: unsupported log type or path"
+            }
+        }
+    } elseif ($runningOnLinux) {
+        Write-Verbose "Fetching logs on Linux..."
+
+        $logs = @()
+        $journalOk = $false
+
+        try {
+            $journalCmd = "journalctl --no-pager --output=json"
+            if ($StartTime) { $journalCmd += " --since='$($StartTime.ToString("yyyy-MM-dd HH:mm:ss"))'" }
+            if ($EndTime)   { $journalCmd += " --until='$($EndTime.ToString("yyyy-MM-dd HH:mm:ss"))'" }
+
+            $journalOutput = bash -c $journalCmd
+            $journalOk = $true
+            $logs = $journalOutput | ConvertFrom-Json
+        } catch {
+            Write-Warning "journalctl failed or not available."
+        }
+
+        if (-not $journalOk) {
+            $fallbackFiles = @("/var/log/syslog", "/var/log/messages", "/var/log/auth.log")
+            foreach ($file in $fallbackFiles) {
+                if (Test-Path $file) {
+                    Get-Content $file | ForEach-Object {
+                        $line = $_
+                        $regex = '^(?<month>\w{3})\s+(?<day>\d{1,2})\s+(?<time>\d{2}:\d{2}:\d{2})'
+                        if ($line -match $regex) {
+                            $month = $matches['month']
+                            $day   = [int]$matches['day']
+                            $time  = $matches['time']
+                            $year  = (Get-Date).Year
+                            $timestamp = [datetime]::ParseExact("$month $day $year $time", "MMM d yyyy HH:mm:ss", $null)
+                        } else {
+                            $timestamp = (Get-Date)
+                        }
+
+                        $level = if ($line -match "(?i)error") { "Error" }
+                                 elseif ($line -match "(?i)warn") { "Warning" }
+                                 elseif ($line -match "(?i)info") { "Information" }
+                                 else { "Unknown" }
+
+                        $logs += [PSCustomObject]@{
+                            TimeCreated      = $timestamp
+                            LevelDisplayName = $level
+                            Message          = $line
+                        }
+                    }
+                }
             }
         }
     }
 
-    # Fallback 1: SmartLogAnalyzer default format
-    if ($Line -match '^(?<Time>[\d\-\s:]+) \[(?<Level>[^\]]+)\] (?<Provider>[^:]+): (?<Message>.+)$') {
-        return [PSCustomObject]@{
-            Timestamp = [datetime]::ParseExact($matches['Time'], 'yyyy-MM-dd HH:mm:ss', $null)
-            Level     = $matches['Level']
-            Provider  = $matches['Provider']
-            Message   = $matches['Message']
+    if ($AttentionOnly) {
+        $logs = $logs | Where-Object {
+            $_.LevelDisplayName -match 'Error|Warning' -or
+            $_.Message -match 'fail|denied|unauthorized|critical|security'
         }
     }
 
-    # Fallback 2: Syslog-like format
-    if ($Line -match '^(?<Month>\w{3}) +(?<Day>\d{1,2}) (?<Time>\d{2}:\d{2}:\d{2}) (?<Host>\S+) (?<Source>[^:]+): (?<Message>.+)$') {
-        $year = (Get-Date).Year
-        $datetime = "$($matches['Month']) $($matches['Day']) $year $($matches['Time'])"
-        return [PSCustomObject]@{
-            Timestamp = [datetime]::ParseExact($datetime, 'MMM dd yyyy HH:mm:ss', $null)
-            Level     = 'Info'
-            Provider  = $matches['Source']
-            Message   = $matches['Message']
+    if ($Colorize) {
+        foreach ($log in $logs) {
+            $timestamp = $log.TimeCreated
+            $level     = $log.LevelDisplayName
+            $msg       = $log.Message
+
+            switch -Regex ($level) {
+                "Error"     { Write-Host "[$timestamp] [ERROR   ] ❌ $msg" -ForegroundColor Red }
+                "Warning"   { Write-Host "[$timestamp] [WARNING ] ⚠️  $msg" -ForegroundColor Yellow }
+                "Info|Information" {
+                    if ($msg -match 'success|started|completed') {
+                        Write-Host "[$timestamp] [INFO    ] ✅ $msg" -ForegroundColor Green
+                    } else {
+                        Write-Host "[$timestamp] [INFO    ] $msg" -ForegroundColor Gray
+                    }
+                }
+                default     { Write-Host "[$timestamp] [UNKNOWN ] $msg" -ForegroundColor DarkGray }
+            }
+        }
+    } else {
+        $logs | Select-Object TimeCreated, LevelDisplayName, Message | Format-Table -AutoSize
+    }
+
+    if ($OutputPath) {
+        try {
+            $logs | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8
+            Write-Host "Logs exported to $OutputPath" -ForegroundColor Cyan
+        } catch {
+            Write-Warning "Failed to export logs: $_"
         }
     }
 
-    # No match fallback
-    return $null
+    return $logs
 }
 
 # SIG # Begin signature block
 # MIIcFAYJKoZIhvcNAQcCoIIcBTCCHAECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCruci4RLwVGVD+
-# aWQXLjVUlv97G0Mfad3OEYHmlH49rqCCFlYwggMYMIICAKADAgECAhAVMtqhUrdy
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCBX1ZIMY3wwPEj/
+# E4Nz+mcxWQrEoJMPqmKeJBCxNlrD86CCFlYwggMYMIICAKADAgECAhAVMtqhUrdy
 # mkjK9MI220b3MA0GCSqGSIb3DQEBCwUAMCQxIjAgBgNVBAMMGVNtYXJ0TG9nQW5h
 # bHl6ZXIgRGV2IENlcnQwHhcNMjUwNjE4MjIxMTA3WhcNMjYwNjE4MjIzMTA3WjAk
 # MSIwIAYDVQQDDBlTbWFydExvZ0FuYWx5emVyIERldiBDZXJ0MIIBIjANBgkqhkiG
@@ -172,28 +268,28 @@ function Format-LogEntry {
 # IjAgBgNVBAMMGVNtYXJ0TG9nQW5hbHl6ZXIgRGV2IENlcnQCEBUy2qFSt3KaSMr0
 # wjbbRvcwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKA
 # ADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYK
-# KwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgBNRv2M1wULZMdpSoW9XnEoGtFJmd
-# VXIPTIpCK2RCxu8wDQYJKoZIhvcNAQEBBQAEggEAHWyZX3I84LzxxdCzpoPLWPbk
-# QlbbomDEmILAJ+hwIP+0JHRH/5Q9cVjoum33wuPOmkmkXcwFBx9rrjlKuN5UgW8f
-# bZxYp1v7UHufYZSYz/73vx066v8yZcn0qHheW2bzgosn+kBDd+v4gzlOQXUbHfdg
-# /0pcd60xr+CnIGXR7F83+tjvYz7VEI+cAo3QO7Gvb3h/4N2XbWQwvXsWhHiWskYQ
-# qxYJC4Aa9DFjMv1ilspDTYOZCdG1isxzodXHftxq+2noauak22vtqPwboq4lyy5W
-# KXKVuMve6a79h79VQIb7bycB/gg1UbK7boTIP3YY5Jf7MS8BxWN0x9gcXHAJIqGC
+# KwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgP777XsVtgohuDqIAh7xsKmNnPKob
+# XL5XxvLtDbZquiowDQYJKoZIhvcNAQEBBQAEggEAs9Pkl232zgwKxefAtnnrosrN
+# ub8QvQTLDZmninqwHp9nrj5afhQbjWQd6cIvJtmMA7Mq13XXrwhiO8HCLiupUqjW
+# AGVzPx6eNkYBgqmfdSeyLojsvIVcCF7F7ecJ+f/ke79qakc3Aao0/1YkepB1vmbg
+# 0TliYoz5YqGjqmg3T6/apBoi9i5x3AkDYfn9yQ/Za3/Nrf8XEOZVgxVy4TjhwcFQ
+# hMEhukzu6aR5prYoy2dcE7rq25ol+G0VWK7VQJm+5WRq7OAa5Wo8RT/bbL9aK+kH
+# 867IycvoVTFhYtB3El0hRJtqxOKicK5Nyi+o20oAMpRWpQvOxDI4eBGLaeBULKGC
 # AyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcw
 # FQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3Rl
 # ZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhL
 # jfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZI
-# hvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNTA2MjAwODM4MzBaMC8GCSqGSIb3DQEJ
-# BDEiBCAPqJW3v13vfN/V6kyd7xy5lNL4DailVGTjS0V4QRuZxTANBgkqhkiG9w0B
-# AQEFAASCAgA5S53QjDA+hFi6RGBoGaZgrKbjUsHXLeECROPaT+1DQXKjB8HMdY00
-# Ff5puhJqBvOqs0etK9y81M5YkszyRF9eO0GMcUEzzrtgbzW1e3ygthtSk5Vda9dQ
-# QXI+PvGV7soTeW7yFYsvifpXTsuOEXu8YyDO8HaEYAb8bAuM785FisFMw+rIKtjB
-# YLZHUFYbOSAXkgJC/Vq5hGeBZkcoC3zUIOOKMRDv1lWU+g9SDYrwW5WhfArLuDv1
-# gHiqphYHiT8gnXVA1g86MVjpJAuPAx1hk8BFuhX3jUhwQoZFCIjGGklUvilNu2j9
-# LSC/80oO4gAmt3PGGarDfedCAO9FiPzIR1LWQ7L/SpF4ZTX1BI9uLFnFWclYIerK
-# bmcKSXzWR2oG4IGhUO/usfu/ZEtwV7W4a/Z0Rr2XIe/tV8kTvUW5HGICF7mYVRP2
-# juMQvJY6kJbhoO7tjYNS0GP+9wzCgw0EmFvRYfgEOShDRa7qQnoasid0HAoeO+ti
-# PTcQxlomG/iTLR+EQE0gFlLgyxPrFZT6V7JI8PizGVgdJWAeKzlv2baydnQTn2Uu
-# 4gYC0QjTS3oPNAEpRE4OBpwQgDqun0RrClKyzBqJ8KCmI8YQ+WI0l2U9XD6tiHwS
-# sqbQ3qHg67bfSR1FY/PIR2QiOIa24Re0NpqGEnIBixCeiN9XcN7CkQ==
+# hvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNTA2MjAwODM4MzFaMC8GCSqGSIb3DQEJ
+# BDEiBCDF2IYGH/INE1OSwtEMUOV5ID//CbOLfTz9kKtrXJ50xDANBgkqhkiG9w0B
+# AQEFAASCAgCrikSvDpx4vsveQ3AUYS9FmKfJqCLrMBGi49UgLNInJHFbPU2r/CFH
+# QgGVbc8yI/3ABVxNSF3wXE4co/CgKzfHjeQMMvNniNU2LG3PACm5HT0dtrkAcX8W
+# I/2wj1RsKSDWZTXwmJA7DAXRlI4sNQRb0dkb87Jy0INBW70Bq8DbMcfCnTKhpuqe
+# UyXVDeajOH9t7sy9Cd/QmPnu+lSxEdOxpCFc7oz8spWLM4tJR7dAi7CxnsX5ONAn
+# E1h4HtFX3MZTBSlk/FOWg0c6lp12XpAK2pdzAWtkzxdWEOkQQQo6EfAmuB8ypTxP
+# 5pT6On+flPwAjOZJJpd01FgTqUhlR+LMu0pmPnehmo7Mp79ioDyCTzoMeIeNw3BO
+# SI17RDkLcgSkUDbfkvks0laE19F4pRYMYeadMVpDOU2s9Q9P1m6PiZ8z+DwEeNy/
+# H9THCFJ68zIOkAAjyRpg+uMoTsvV7LOAtRUq9MjWZmhLpEEz/yKuO6M59NAMaQmh
+# Wa8sdKD0iIqdqYwHMRhHrUZTHhjSv5mfg2ofzWde//DPfc6+aDNxw47GVrD2aUYV
+# dDntGwT+Hbj/h9NUME7cWmq/7o8RKmAEEXiOI2UKUyXUUiUVR/tgj1rm/oTvj2Rv
+# ZVBmtAVs3h04iPnRPEISBJ3ISgQ8PG3bvg1AopJODd+YBV8WGSKsEg==
 # SIG # End signature block

@@ -1,55 +1,107 @@
-function Format-LogEntry {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory)]
-        [string]$Line,
+Describe "SmartLogAnalyzer - Full Module Integration Test Suite" {
 
-        [string[]]$CustomPatterns = @()
-    )
+    Context "Public Function: Get-LogEntries" {
+        It "Should parse a sample log file and return structured entries" {
+            $logPath = Join-Path $PSScriptRoot "Sample.Logs\sample.test.log"
+            $entries = Get-LogEntries -Path $logPath
+            $entries | Should -Not -BeNullOrEmpty
+            $entries[0] | Should -HaveProperty 'TimeCreated'
+            $entries[0] | Should -HaveProperty 'Level'
+            $entries[0] | Should -HaveProperty 'Message'
+        }
+    }
 
-    # Try custom regex rules from config or input
-    foreach ($pattern in $CustomPatterns) {
-        if ($Line -match $pattern) {
-            return [PSCustomObject]@{
-                Timestamp = if ($matches['Time']) { $matches['Time'] } else { $null }
-                Level     = if ($matches['Level']) { $matches['Level'] } else { 'Info' }
-                Provider  = if ($matches['Source']) { $matches['Source'] } else { 'Unknown' }
-                Message   = if ($matches['Message']) { $matches['Message'] } else { $Line }
+    Context "Public Function: Get-LogSummary" {
+        It "Should return a summary object with counts" {
+            $logPath = Join-Path $PSScriptRoot "Sample.Logs\sample.test.log"
+            $entries = Get-LogEntries -Path $logPath
+            $summary = Get-LogSummary -LogLines $entries
+            $summary.TotalLines | Should -BeGreaterThan 0
+        }
+    }
+
+    Context "Public Function: Invoke-SmartAnalyzer with -Path" {
+        It "Should return entries and summary from sample log" {
+            $logPath = Join-Path $PSScriptRoot "Sample.Logs\sample.test.log"
+            $result = Invoke-SmartAnalyzer -Path $logPath -AttentionOnly
+            $result.Entries.Count | Should -Be 3
+            $result.Summary | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    Context "Public Function: Invoke-SmartAnalyzer with -FetchLogs" {
+        It "Should auto-fetch system logs and generate a report" {
+            $reportPath = "$env:TEMP\SystemLogReport.txt"
+            $result = Invoke-SmartAnalyzer -FetchLogs -LogType System -AttentionOnly -Colorize -ReportPath $reportPath -ReportFormat Text
+            $result.Entries | Should -Not -BeNullOrEmpty
+            Test-Path $reportPath | Should -BeTrue
+        }
+    }
+
+    Context "Public Function: Get-SystemLogs" {
+        It "Should fetch logs for the system log type on current OS" {
+            $entries = Get-SystemLogs -LogType System -StartTime (Get-Date).AddHours(-1) -EndTime (Get-Date)
+            $entries | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    Context "Public Function: Get-SystemLogs (Linux journalctl fallback)" {
+        It "Should fetch journalctl logs on Linux systems" -Skip:(!$IsLinux) {
+            $entries = Get-SystemLogs -LogType System -StartTime (Get-Date).AddHours(-1) -EndTime (Get-Date)
+            $entries | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    Context "Private Function: Protect-LogEntry" {
+        It "Should redact sensitive info in log message" {
+            $log = @{ Message = "User admin with password 1234 logged in." }
+            $redacted = Protect-LogEntry -Entry $log
+            $redacted.Message | Should -Not -Match "1234"
+        }
+    }
+
+    Context "Private Function: Convert-Timestamp" {
+        It "Should convert a log timestamp to [datetime] object" {
+            $timestamp = "2025-06-17 14:22:15"
+            $converted = Convert-Timestamp -Input $timestamp
+            $converted | Should -BeOfType "System.DateTime"
+        }
+    }
+
+    Context "Private Function: Format-LogEntry" {
+        It "Should format a raw log string into an object" {
+            $line = "2025-06-17 14:22:17 [ERROR] AuthService: Failed login attempt"
+            $formatted = Format-LogEntry -Line $line
+            $formatted.Level | Should -Be "ERROR"
+            $formatted.Message | Should -Match "Failed login"
+        }
+    }
+
+    Context "Private Function: Export-LogReport" {
+        It "Should create a report file from summary and entries" {
+            $logPath = Join-Path $PSScriptRoot "Sample.Logs\sample.test.log"
+            $entries = Get-LogEntries -Path $logPath
+            $summary = Get-LogSummary -LogLines $entries
+            $reportPath = "$env:TEMP\ExportedReport.txt"
+            Export-LogReport -Summary $summary -Entries $entries -SourcePath $logPath -OutputPath $reportPath -Format Text
+            Test-Path $reportPath | Should -BeTrue
+        }
+    }
+
+    Context "Windows GUI: Show-LogAnalyzerUI" {
+        It "Should be defined as a function on Windows only" {
+            if ($IsWindows) {
+                (Get-Command Show-LogAnalyzerUI -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
             }
         }
     }
-
-    # Fallback 1: SmartLogAnalyzer default format
-    if ($Line -match '^(?<Time>[\d\-\s:]+) \[(?<Level>[^\]]+)\] (?<Provider>[^:]+): (?<Message>.+)$') {
-        return [PSCustomObject]@{
-            Timestamp = [datetime]::ParseExact($matches['Time'], 'yyyy-MM-dd HH:mm:ss', $null)
-            Level     = $matches['Level']
-            Provider  = $matches['Provider']
-            Message   = $matches['Message']
-        }
-    }
-
-    # Fallback 2: Syslog-like format
-    if ($Line -match '^(?<Month>\w{3}) +(?<Day>\d{1,2}) (?<Time>\d{2}:\d{2}:\d{2}) (?<Host>\S+) (?<Source>[^:]+): (?<Message>.+)$') {
-        $year = (Get-Date).Year
-        $datetime = "$($matches['Month']) $($matches['Day']) $year $($matches['Time'])"
-        return [PSCustomObject]@{
-            Timestamp = [datetime]::ParseExact($datetime, 'MMM dd yyyy HH:mm:ss', $null)
-            Level     = 'Info'
-            Provider  = $matches['Source']
-            Message   = $matches['Message']
-        }
-    }
-
-    # No match fallback
-    return $null
 }
 
 # SIG # Begin signature block
 # MIIcFAYJKoZIhvcNAQcCoIIcBTCCHAECAQExDzANBglghkgBZQMEAgEFADB5Bgor
 # BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCCruci4RLwVGVD+
-# aWQXLjVUlv97G0Mfad3OEYHmlH49rqCCFlYwggMYMIICAKADAgECAhAVMtqhUrdy
+# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCDgvhDqiGfpBfop
+# b65NCgAMX9h7IolWBhKTO4IfCOzwwaCCFlYwggMYMIICAKADAgECAhAVMtqhUrdy
 # mkjK9MI220b3MA0GCSqGSIb3DQEBCwUAMCQxIjAgBgNVBAMMGVNtYXJ0TG9nQW5h
 # bHl6ZXIgRGV2IENlcnQwHhcNMjUwNjE4MjIxMTA3WhcNMjYwNjE4MjIzMTA3WjAk
 # MSIwIAYDVQQDDBlTbWFydExvZ0FuYWx5emVyIERldiBDZXJ0MIIBIjANBgkqhkiG
@@ -172,28 +224,28 @@ function Format-LogEntry {
 # IjAgBgNVBAMMGVNtYXJ0TG9nQW5hbHl6ZXIgRGV2IENlcnQCEBUy2qFSt3KaSMr0
 # wjbbRvcwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKA
 # ADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYK
-# KwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgBNRv2M1wULZMdpSoW9XnEoGtFJmd
-# VXIPTIpCK2RCxu8wDQYJKoZIhvcNAQEBBQAEggEAHWyZX3I84LzxxdCzpoPLWPbk
-# QlbbomDEmILAJ+hwIP+0JHRH/5Q9cVjoum33wuPOmkmkXcwFBx9rrjlKuN5UgW8f
-# bZxYp1v7UHufYZSYz/73vx066v8yZcn0qHheW2bzgosn+kBDd+v4gzlOQXUbHfdg
-# /0pcd60xr+CnIGXR7F83+tjvYz7VEI+cAo3QO7Gvb3h/4N2XbWQwvXsWhHiWskYQ
-# qxYJC4Aa9DFjMv1ilspDTYOZCdG1isxzodXHftxq+2noauak22vtqPwboq4lyy5W
-# KXKVuMve6a79h79VQIb7bycB/gg1UbK7boTIP3YY5Jf7MS8BxWN0x9gcXHAJIqGC
+# KwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgRDTTLPbOIH1SSrzvtNRTLrjgDTJl
+# DjafyTw0tOPQJJQwDQYJKoZIhvcNAQEBBQAEggEAROmKpIv2fRyZf4oHhxs3FeXT
+# KaRR8PP49wXdrCLkkdfVtqQZtyhTZugFugSxm1KIPFrw4d1FcPss8kJRa2ojqq63
+# ASZo7K2TIA5EDC4ZuZ2sureXu1FSpqn0DCl6uct8F7ha1PqJERqUvdixFZoLITUm
+# wticTXYbd1S48PKrRIpM0fq1s7JWhvf7YhZ/7WHpa5LTouLuS/PJMXdDrYGTHKyU
+# X48VpOAillns8SMaGdV5mwxmuSC/pGpjIPdg1CXXH77Gyq9gccIzgbrdsRdP3hJV
+# TxlaSKET7l2L+MbYRVTThzemjcDT1tb2Yjo0McxiqPIAztzembk2nP07tgQjoaGC
 # AyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcw
 # FQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3Rl
 # ZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhL
 # jfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZI
-# hvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNTA2MjAwODM4MzBaMC8GCSqGSIb3DQEJ
-# BDEiBCAPqJW3v13vfN/V6kyd7xy5lNL4DailVGTjS0V4QRuZxTANBgkqhkiG9w0B
-# AQEFAASCAgA5S53QjDA+hFi6RGBoGaZgrKbjUsHXLeECROPaT+1DQXKjB8HMdY00
-# Ff5puhJqBvOqs0etK9y81M5YkszyRF9eO0GMcUEzzrtgbzW1e3ygthtSk5Vda9dQ
-# QXI+PvGV7soTeW7yFYsvifpXTsuOEXu8YyDO8HaEYAb8bAuM785FisFMw+rIKtjB
-# YLZHUFYbOSAXkgJC/Vq5hGeBZkcoC3zUIOOKMRDv1lWU+g9SDYrwW5WhfArLuDv1
-# gHiqphYHiT8gnXVA1g86MVjpJAuPAx1hk8BFuhX3jUhwQoZFCIjGGklUvilNu2j9
-# LSC/80oO4gAmt3PGGarDfedCAO9FiPzIR1LWQ7L/SpF4ZTX1BI9uLFnFWclYIerK
-# bmcKSXzWR2oG4IGhUO/usfu/ZEtwV7W4a/Z0Rr2XIe/tV8kTvUW5HGICF7mYVRP2
-# juMQvJY6kJbhoO7tjYNS0GP+9wzCgw0EmFvRYfgEOShDRa7qQnoasid0HAoeO+ti
-# PTcQxlomG/iTLR+EQE0gFlLgyxPrFZT6V7JI8PizGVgdJWAeKzlv2baydnQTn2Uu
-# 4gYC0QjTS3oPNAEpRE4OBpwQgDqun0RrClKyzBqJ8KCmI8YQ+WI0l2U9XD6tiHwS
-# sqbQ3qHg67bfSR1FY/PIR2QiOIa24Re0NpqGEnIBixCeiN9XcN7CkQ==
+# hvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNTA2MjAwODM4MzFaMC8GCSqGSIb3DQEJ
+# BDEiBCBZIYSLR0/f+A4eTg99o/aYqGi0GBWqI8Qq1MEsE6CpAjANBgkqhkiG9w0B
+# AQEFAASCAgAnR72tG/P2Jjjx/JR8fbw9Aq8bVCkG9Z4WNuamurBWBpUasD1o6NOF
+# UCCwqxA96Ei3N3MczWeKiD7Ri34zivRkZwLgy33wr66NLA5vW7RfHFh+kbydi0b/
+# zTaKFDHQHDSuykLvggbYd3xDIcqmsRvgh+4aiUIKpNPmfgwZdB4PTj9EmPHCLHxU
+# L4UNt2VnkfrqvMnua96h2CdaHsqjOmcjSJWehge2LS5METbJIHIuvUHmDxkAOPXd
+# cpE9v8Wo7qgx1X8SfOMG5geIe8WksBmf3omAqZjWT7XWaUSPuQV3ThnsTdKsQapV
+# QKttsqRp7OiUx6HMY/8L+Uh2l3uEsJ3jYsGvqHl639DQXcz1ksav9s1/R+LAdoK8
+# ymUqibzuRryb3BB2+1263DYBdfGd59b7TF4gHcKr7j+k+ER4Es23tUXUere1XVVk
+# 9CNH/ZHVy+PbCZv4dCuaU+W5adBYjXKzYThioKmKoH3biHjKcYJneiRGexQ9J5cW
+# cDkVWtqJpj9CFGfzXuMCYqVfkpJxrjkaxtbmIcAJ35ZFGLlKSRGiAG73xkOAuM6p
+# W1zu1H+oKeuPxlNte54dQ2mQgRMfBGB2jODNGJoZVYRoniPJ0k4wKTAHUp3GHe1C
+# j5jwYRcxP9Z+7DhV4U3oPzaWO10VpovdKrvvIAOSJMZ69yl0M5px4g==
 # SIG # End signature block
