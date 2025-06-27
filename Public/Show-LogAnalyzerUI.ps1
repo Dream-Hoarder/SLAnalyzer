@@ -16,7 +16,7 @@ function Show-LogAnalyzerUI {
     Write-Host "[DEBUG] Creating main form"
     $form = New-Object Windows.Forms.Form
     $form.Text = "Smart Log Analyzer"
-    $form.Size = New-Object Drawing.Size(1000, 780)
+    $form.Size = New-Object Drawing.Size(1000, 820)
     $form.StartPosition = "CenterScreen"
 
     $lblLogType = New-Object Windows.Forms.Label
@@ -80,15 +80,22 @@ function Show-LogAnalyzerUI {
     $btnExportJSON.Location = New-Object Drawing.Point(650, 40)
     $btnExportJSON.Size = New-Object Drawing.Size(80, 30)
 
+    $btnExportReport = New-Object Windows.Forms.Button
+    $btnExportReport.Text = "Export Log Report"
+    $btnExportReport.Location = New-Object Drawing.Point(740, 40)
+    $btnExportReport.Size = New-Object Drawing.Size(110, 30)
+
     $grid = New-Object Windows.Forms.DataGridView
     $grid.Location = New-Object Drawing.Point(10, 80)
-    $grid.Size = New-Object Drawing.Size(960, 580)
+    $grid.Size = New-Object Drawing.Size(960, 620)
     $grid.AutoSizeColumnsMode = 'Fill'
     $grid.ReadOnly = $true
     $grid.AutoGenerateColumns = $false
+    $grid.AllowUserToAddRows = $false
+    $grid.RowHeadersVisible = $false
 
     $lblSummary = New-Object Windows.Forms.Label
-    $lblSummary.Location = New-Object Drawing.Point(10, 670)
+    $lblSummary.Location = New-Object Drawing.Point(10, 710)
     $lblSummary.Size = New-Object Drawing.Size(960, 60)
     $lblSummary.Text = "Summary will appear here..."
 
@@ -97,11 +104,24 @@ function Show-LogAnalyzerUI {
         $lblStartTime, $dtStart,
         $lblEndTime, $dtEnd,
         $chkRedact, $chkRedactLog,
-        $btnFetch, $btnExportCSV, $btnExportJSON,
+        $btnFetch, $btnExportCSV, $btnExportJSON, $btnExportReport,
         $grid, $lblSummary
     ))
 
     $logData = @()
+
+    # Colorize rows based on log level, avoid assignment to automatic variables
+    $grid.RowPrePaint += {
+        param($s, $ev)
+        $row = $s.Rows[$ev.RowIndex]
+        $level = $row.Cells["Level"].Value
+        switch ($level) {
+            "Error"       { $row.DefaultCellStyle.BackColor = [Drawing.Color]::LightCoral }
+            "Warning"     { $row.DefaultCellStyle.BackColor = [Drawing.Color]::LightGoldenrodYellow }
+            "Information" { $row.DefaultCellStyle.BackColor = [Drawing.Color]::LightGreen }
+            default       { $row.DefaultCellStyle.BackColor = [Drawing.Color]::White }
+        }
+    }
 
     $btnFetch.Add_Click({
         try {
@@ -190,11 +210,34 @@ function Show-LogAnalyzerUI {
         }
     })
 
+    # Export full report integration
+    $btnExportReport.Add_Click({
+        Write-Host "[DEBUG] Export Log Report clicked"
+        if (-not $logData) { 
+            [System.Windows.Forms.MessageBox]::Show("No log data to export.", "Export", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            return 
+        }
+
+        $save = New-Object System.Windows.Forms.SaveFileDialog
+        $save.Filter = "Text Files (*.txt)|*.txt|All Files (*.*)|*.*"
+        $save.FileName = "LogReport.txt"
+        if ($save.ShowDialog() -eq "OK") {
+            try {
+                # Export-LogReport expects raw entries, so pass the original entries array
+                Export-LogReport -LogEntries $result.Entries -Path $save.FileName
+                [System.Windows.Forms.MessageBox]::Show("Exported log report.", "Export", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+            } catch {
+                [System.Windows.Forms.MessageBox]::Show("Failed to export log report. `n$($_.Exception.Message)", "Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            }
+        }
+    })
+
     Write-Host "[DEBUG] Displaying form"
     $form.Topmost = $true
     $form.Add_Shown({ $form.Activate() })
     [void]$form.ShowDialog()
 }
+
 
 
 

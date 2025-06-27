@@ -12,6 +12,7 @@
 . "$PSScriptRoot\Public\Get-LogEntries.ps1"
 . "$PSScriptRoot\Public\Get-LogSummary.ps1"
 . "$PSScriptRoot\Public\Invoke-SmartAnalyzer.ps1"
+. "$PSScriptRoot\Public\Get-SystemLogs.ps1"
 
 # Conditionally load UI only on Windows
 if ($IsWindows) {
