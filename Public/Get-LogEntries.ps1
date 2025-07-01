@@ -1,7 +1,6 @@
 function Get-LogEntries {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory)]
         [string]$Path,
 
         [string[]]$IncludeKeywords = @(),
@@ -22,23 +21,56 @@ function Get-LogEntries {
         [string]$ExportFormat = "CSV",
 
         [int]$Tail,
-        [int]$LineLimit
+        [int]$LineLimit,
+
+        [switch]$Redact,
+        [switch]$Colorize,
+
+        [ValidateSet("System", "Application", "Security", "Custom")]
+        [string]$LogType = "Custom"
     )
 
-    if (-not (Test-Path $Path) -and ($Path -ne 'journalctl')) {
+    # If LogType is set and not Custom, adjust $Path accordingly (Windows only)
+    if ($LogType -ne "Custom") {
+        if (-not $IsWindows) {
+            throw "❌ LogType filtering is only supported on Windows event logs."
+        }
+        switch ($LogType) {
+            "System" { $Path = "System" }
+            "Application" { $Path = "Application" }
+            "Security" { $Path = "Security" }
+        }
+    }
+
+    # Validate path unless LogType is Windows Event Logs or journalctl
+    if (($Path -ne 'journalctl') -and
+        ($Path -notin @("System", "Application", "Security")) -and
+        (-not (Test-Path $Path))) {
         throw [System.IO.FileNotFoundException]::new("File not found: $Path", $Path)
     }
 
     $entries = @()
 
-    # Windows Event Log Parsing
-    if ($Path -match '\.(evtx|evt)$') {
+    # Windows Event Logs (using Get-WinEvent) for System/Application/Security or .evtx files
+    if ($Path -in @("System", "Application", "Security") -or ($Path -match '\.(evtx|evt)$')) {
         if (-not $IsWindows) {
             throw "❌ Windows event log parsing is only supported on Windows."
         }
 
         try {
-            $events = Get-WinEvent -Path $Path -Oldest
+            $queryParams = @{
+                LogName = $null
+                Path = $null
+                Oldest = $true
+            }
+
+            if ($Path -in @("System", "Application", "Security")) {
+                $queryParams.LogName = $Path
+            } else {
+                $queryParams.Path = $Path
+            }
+
+            $events = Get-WinEvent @queryParams
 
             if ($StartTime) { $events = $events | Where-Object { $_.TimeCreated -ge $StartTime } }
             if ($EndTime)   { $events = $events | Where-Object { $_.TimeCreated -le $EndTime } }
@@ -51,34 +83,51 @@ function Get-LogEntries {
             }
 
             $entries = $events | ForEach-Object {
-    "$($_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')) [$($_.LevelDisplayName)] $($_.ProviderName): Event ID $($_.Id) - $($_.Message)"
-}
+                [PSCustomObject]@{
+                    Timestamp = $_.TimeCreated
+                    Level     = $_.LevelDisplayName
+                    Provider  = $_.ProviderName
+                    EventId   = $_.Id
+                    Message   = $_.Message
+                }
+            }
 
         } catch {
-            throw "❌ Failed to parse EVT/EVTX file: $_"
+            throw "❌ Failed to parse Windows event log: $_"
         }
 
-    } elseif ($Path -eq 'journalctl' -and !$IsWindows) {
-        # journalctl support (Linux only)
+    } elseif ($Path -eq 'journalctl' -and -not $IsWindows) {
+        # Linux journalctl
         try {
             $cmd = "journalctl --no-pager"
             if ($StartTime) { $cmd += " --since '$($StartTime.ToString("yyyy-MM-dd HH:mm:ss"))'" }
             if ($EndTime) { $cmd += " --until '$($EndTime.ToString("yyyy-MM-dd HH:mm:ss"))'" }
-            $entries = bash -c $cmd
+            $rawEntries = bash -c $cmd
+
+            # Convert raw entries to PSCustomObject with minimal fields (optional)
+            $entries = $rawEntries | ForEach-Object {
+                [PSCustomObject]@{
+                    Timestamp = $_.Substring(0,19)
+                    Message   = $_
+                }
+            }
         } catch {
             throw "❌ Failed to retrieve journalctl entries: $_"
         }
     } else {
+        # Plain text log file
         try {
             $entries = Get-Content -Path $Path -Encoding UTF8 -ErrorAction Stop
         } catch {
             throw "❌ Failed to read text log: $_"
         }
 
+        # Apply sort order for text logs
         if ($SortOrder -eq "Reverse") {
             $entries = $entries | Sort-Object { [array]::IndexOf($entries, $_) } -Descending
         }
 
+        # Filter by datetime range (assumes format: yyyy-MM-dd HH:mm:ss)
         if ($StartTime -or $EndTime) {
             $entries = $entries | Where-Object {
                 if ($_ -match '^(?<Time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
@@ -92,24 +141,74 @@ function Get-LogEntries {
         }
     }
 
-    # Keyword filtering
+    # Keyword filtering for string entries
     if ($IncludeKeywords.Count -gt 0) {
         $pattern = ($IncludeKeywords -join '|')
-        $entries = $entries | Where-Object { $_ -match $pattern }
+        $entries = $entries | Where-Object {
+            if ($_ -is [string]) {
+                $_ -match $pattern
+            } else {
+                # For objects with Message property
+                $_.Message -match $pattern
+            }
+        }
     }
 
     if ($ExcludeKeywords.Count -gt 0) {
         $pattern = ($ExcludeKeywords -join '|')
-        $entries = $entries | Where-Object { $_ -notmatch $pattern }
+        $entries = $entries | Where-Object {
+            if ($_ -is [string]) {
+                $_ -notmatch $pattern
+            } else {
+                $_.Message -notmatch $pattern
+            }
+        }
     }
 
+    # Tail or LineLimit
     if ($Tail) {
         $entries = $entries | Select-Object -Last $Tail
     } elseif ($LineLimit) {
         $entries = $entries | Select-Object -First $LineLimit
     }
 
-    # Log Summary
+    # Redact sensitive info (simple example)
+    if ($Redact) {
+        $entries = $entries | ForEach-Object {
+            if ($_ -is [string]) {
+                $_ -replace '(password|token|secret)\s*[:=]?\s*\S+', '[REDACTED]'
+            } else {
+                if ($_.Message) {
+                    $_.Message = $_.Message -replace '(password|token|secret)\s*[:=]?\s*\S+', '[REDACTED]'
+                }
+                $_
+            }
+        }
+    }
+
+    # Colorize output (simple console coloring of string entries)
+    if ($Colorize) {
+        $entries = $entries | ForEach-Object {
+            if ($_ -is [string]) {
+                if ($_ -match '\[ERROR\]') {
+                    Write-Host $_ -ForegroundColor Red
+                } elseif ($_ -match '\[WARN\]') {
+                    Write-Host $_ -ForegroundColor Yellow
+                } elseif ($_ -match '\[INFO\]') {
+                    Write-Host $_ -ForegroundColor Green
+                } else {
+                    Write-Host $_
+                }
+                # Return original line so pipeline continues
+                $_
+            } else {
+                # For objects, just return as-is (no colorization)
+                $_
+            }
+        }
+    }
+
+    # Log Summary call (optional)
     try {
         $summary = Get-LogSummary -LogLines $entries
         Write-Host "`n=== LOG SUMMARY ===" -ForegroundColor Cyan
@@ -122,11 +221,9 @@ function Get-LogEntries {
     if ($ExportPath) {
         try {
             if ($ExportFormat -eq "CSV") {
-                $entries | ForEach-Object { [PSCustomObject]@{ Entry = $_ } } |
-                    Export-Csv -Path $ExportPath -NoTypeInformation -Force
+                $entries | Export-Csv -Path $ExportPath -NoTypeInformation -Force
             } elseif ($ExportFormat -eq "JSON") {
-                $entries | ForEach-Object { [PSCustomObject]@{ Entry = $_ } } |
-                    ConvertTo-Json -Depth 3 | Out-File -FilePath $ExportPath -Encoding UTF8
+                $entries | ConvertTo-Json -Depth 3 | Out-File -FilePath $ExportPath -Encoding UTF8
             }
             Write-Host "✅ Log entries exported to $ExportPath" -ForegroundColor Green
         } catch {
@@ -136,157 +233,9 @@ function Get-LogEntries {
 
     return $entries
 }
-
-
-# SIG # Begin signature block
-# MIIcFAYJKoZIhvcNAQcCoIIcBTCCHAECAQExDzANBglghkgBZQMEAgEFADB5Bgor
-# BgEEAYI3AgEEoGswaTA0BgorBgEEAYI3AgEeMCYCAwEAAAQQH8w7YFlLCE63JNLG
-# KX7zUQIBAAIBAAIBAAIBAAIBADAxMA0GCWCGSAFlAwQCAQUABCC8l4ykM0OSbsJH
-# woM4htLsr6+1j1SkPYej+WHLPtOTi6CCFlYwggMYMIICAKADAgECAhAVMtqhUrdy
-# mkjK9MI220b3MA0GCSqGSIb3DQEBCwUAMCQxIjAgBgNVBAMMGVNtYXJ0TG9nQW5h
-# bHl6ZXIgRGV2IENlcnQwHhcNMjUwNjE4MjIxMTA3WhcNMjYwNjE4MjIzMTA3WjAk
-# MSIwIAYDVQQDDBlTbWFydExvZ0FuYWx5emVyIERldiBDZXJ0MIIBIjANBgkqhkiG
-# 9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzLQdDt7qLciu6u2CtXOuwfSDoMKY73xMjh7l
-# AcWWteWEvv9zLo6zQ02uHX5Xgz+dLyNhYs0kqQor4s8DkSRRQXzr90IENyL5LG5B
-# sMyFhhmmUjA4QFQxgn5exm4DI56hNw/VrDKTkGUvHE2SAai7spZBSkU6hXe2+aEj
-# Ld9vdbJc5gS0iGQ+XIF6oJUB3owuQE+30WFZaGpqtHfS8jtxkwUsfwxM1Y2AK+Zj
-# Mv1P+njfhVDbfIsXS051dtXbeE5ClEu5XINZP7zVXy4XEsGo/br/cA3OubbEzEJW
-# SnPVuuZGsw4SoM3RJx0MVPZG4vd2YLZDKiJYqv3uJBgQi4LYhQIDAQABo0YwRDAO
-# BgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwMwHQYDVR0OBBYEFEOg
-# ZC7C7IdkMQsB+4Eti+0plKQ1MA0GCSqGSIb3DQEBCwUAA4IBAQDJ+i2wjjPtCzjF
-# hrZw0IfpPcOOy/1fQXAryX52thXIA/Wcb+6qi5WmEpHZtZTxnZ3qyIkRpGa0NsuH
-# BlYu0HlTN9Y6JA25gdiOQ9idDpUbpOz+gfD/t9vs0+cQC664l7mnFqHGXRrSsC4N
-# zLYnde5ROU3NWfUkZyEsftBk0IghIi4qvJXAW3ic6dDQdq4rEpuUrI+pa2R2h1nE
-# sjkv2ru5yL58u8zS7enQ4XGMJRfcow4yyS55a3tQYtnZzCyWS7AeYkbTTjzE4Oxg
-# p31zzX01eYEundHvZAxoLg7QENvbqWiFwkbx7ssc/6ehiwOapNUhJTOB1glNAqX/
-# rGRwMRitMIIFjTCCBHWgAwIBAgIQDpsYjvnQLefv21DiCEAYWjANBgkqhkiG9w0B
-# AQwFADBlMQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYD
-# VQQLExB3d3cuZGlnaWNlcnQuY29tMSQwIgYDVQQDExtEaWdpQ2VydCBBc3N1cmVk
-# IElEIFJvb3QgQ0EwHhcNMjIwODAxMDAwMDAwWhcNMzExMTA5MjM1OTU5WjBiMQsw
-# CQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cu
-# ZGlnaWNlcnQuY29tMSEwHwYDVQQDExhEaWdpQ2VydCBUcnVzdGVkIFJvb3QgRzQw
-# ggIiMA0GCSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC/5pBzaN675F1KPDAiMGkz
-# 7MKnJS7JIT3yithZwuEppz1Yq3aaza57G4QNxDAf8xukOBbrVsaXbR2rsnnyyhHS
-# 5F/WBTxSD1Ifxp4VpX6+n6lXFllVcq9ok3DCsrp1mWpzMpTREEQQLt+C8weE5nQ7
-# bXHiLQwb7iDVySAdYyktzuxeTsiT+CFhmzTrBcZe7FsavOvJz82sNEBfsXpm7nfI
-# SKhmV1efVFiODCu3T6cw2Vbuyntd463JT17lNecxy9qTXtyOj4DatpGYQJB5w3jH
-# trHEtWoYOAMQjdjUN6QuBX2I9YI+EJFwq1WCQTLX2wRzKm6RAXwhTNS8rhsDdV14
-# Ztk6MUSaM0C/CNdaSaTC5qmgZ92kJ7yhTzm1EVgX9yRcRo9k98FpiHaYdj1ZXUJ2
-# h4mXaXpI8OCiEhtmmnTK3kse5w5jrubU75KSOp493ADkRSWJtppEGSt+wJS00mFt
-# 6zPZxd9LBADMfRyVw4/3IbKyEbe7f/LVjHAsQWCqsWMYRJUadmJ+9oCw++hkpjPR
-# iQfhvbfmQ6QYuKZ3AeEPlAwhHbJUKSWJbOUOUlFHdL4mrLZBdd56rF+NP8m800ER
-# ElvlEFDrMcXKchYiCd98THU/Y+whX8QgUWtvsauGi0/C1kVfnSD8oR7FwI+isX4K
-# Jpn15GkvmB0t9dmpsh3lGwIDAQABo4IBOjCCATYwDwYDVR0TAQH/BAUwAwEB/zAd
-# BgNVHQ4EFgQU7NfjgtJxXWRM3y5nP+e6mK4cD08wHwYDVR0jBBgwFoAUReuir/SS
-# y4IxLVGLp6chnfNtyA8wDgYDVR0PAQH/BAQDAgGGMHkGCCsGAQUFBwEBBG0wazAk
-# BggrBgEFBQcwAYYYaHR0cDovL29jc3AuZGlnaWNlcnQuY29tMEMGCCsGAQUFBzAC
-# hjdodHRwOi8vY2FjZXJ0cy5kaWdpY2VydC5jb20vRGlnaUNlcnRBc3N1cmVkSURS
-# b290Q0EuY3J0MEUGA1UdHwQ+MDwwOqA4oDaGNGh0dHA6Ly9jcmwzLmRpZ2ljZXJ0
-# LmNvbS9EaWdpQ2VydEFzc3VyZWRJRFJvb3RDQS5jcmwwEQYDVR0gBAowCDAGBgRV
-# HSAAMA0GCSqGSIb3DQEBDAUAA4IBAQBwoL9DXFXnOF+go3QbPbYW1/e/Vwe9mqyh
-# hyzshV6pGrsi+IcaaVQi7aSId229GhT0E0p6Ly23OO/0/4C5+KH38nLeJLxSA8hO
-# 0Cre+i1Wz/n096wwepqLsl7Uz9FDRJtDIeuWcqFItJnLnU+nBgMTdydE1Od/6Fmo
-# 8L8vC6bp8jQ87PcDx4eo0kxAGTVGamlUsLihVo7spNU96LHc/RzY9HdaXFSMb++h
-# UD38dglohJ9vytsgjTVgHAIDyyCwrFigDkBjxZgiwbJZ9VVrzyerbHbObyMt9H5x
-# aiNrIv8SuFQtJ37YOtnwtoeW/VvRXKwYw02fc7cBqZ9Xql4o4rmUMIIGtDCCBJyg
-# AwIBAgIQDcesVwX/IZkuQEMiDDpJhjANBgkqhkiG9w0BAQsFADBiMQswCQYDVQQG
-# EwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3d3cuZGlnaWNl
-# cnQuY29tMSEwHwYDVQQDExhEaWdpQ2VydCBUcnVzdGVkIFJvb3QgRzQwHhcNMjUw
-# NTA3MDAwMDAwWhcNMzgwMTE0MjM1OTU5WjBpMQswCQYDVQQGEwJVUzEXMBUGA1UE
-# ChMORGlnaUNlcnQsIEluYy4xQTA/BgNVBAMTOERpZ2lDZXJ0IFRydXN0ZWQgRzQg
-# VGltZVN0YW1waW5nIFJTQTQwOTYgU0hBMjU2IDIwMjUgQ0ExMIICIjANBgkqhkiG
-# 9w0BAQEFAAOCAg8AMIICCgKCAgEAtHgx0wqYQXK+PEbAHKx126NGaHS0URedTa2N
-# DZS1mZaDLFTtQ2oRjzUXMmxCqvkbsDpz4aH+qbxeLho8I6jY3xL1IusLopuW2qft
-# JYJaDNs1+JH7Z+QdSKWM06qchUP+AbdJgMQB3h2DZ0Mal5kYp77jYMVQXSZH++0t
-# rj6Ao+xh/AS7sQRuQL37QXbDhAktVJMQbzIBHYJBYgzWIjk8eDrYhXDEpKk7RdoX
-# 0M980EpLtlrNyHw0Xm+nt5pnYJU3Gmq6bNMI1I7Gb5IBZK4ivbVCiZv7PNBYqHEp
-# NVWC2ZQ8BbfnFRQVESYOszFI2Wv82wnJRfN20VRS3hpLgIR4hjzL0hpoYGk81coW
-# J+KdPvMvaB0WkE/2qHxJ0ucS638ZxqU14lDnki7CcoKCz6eum5A19WZQHkqUJfdk
-# DjHkccpL6uoG8pbF0LJAQQZxst7VvwDDjAmSFTUms+wV/FbWBqi7fTJnjq3hj0Xb
-# Qcd8hjj/q8d6ylgxCZSKi17yVp2NL+cnT6Toy+rN+nM8M7LnLqCrO2JP3oW//1sf
-# uZDKiDEb1AQ8es9Xr/u6bDTnYCTKIsDq1BtmXUqEG1NqzJKS4kOmxkYp2WyODi7v
-# QTCBZtVFJfVZ3j7OgWmnhFr4yUozZtqgPrHRVHhGNKlYzyjlroPxul+bgIspzOwb
-# tmsgY1MCAwEAAaOCAV0wggFZMBIGA1UdEwEB/wQIMAYBAf8CAQAwHQYDVR0OBBYE
-# FO9vU0rp5AZ8esrikFb2L9RJ7MtOMB8GA1UdIwQYMBaAFOzX44LScV1kTN8uZz/n
-# upiuHA9PMA4GA1UdDwEB/wQEAwIBhjATBgNVHSUEDDAKBggrBgEFBQcDCDB3Bggr
-# BgEFBQcBAQRrMGkwJAYIKwYBBQUHMAGGGGh0dHA6Ly9vY3NwLmRpZ2ljZXJ0LmNv
-# bTBBBggrBgEFBQcwAoY1aHR0cDovL2NhY2VydHMuZGlnaWNlcnQuY29tL0RpZ2lD
-# ZXJ0VHJ1c3RlZFJvb3RHNC5jcnQwQwYDVR0fBDwwOjA4oDagNIYyaHR0cDovL2Ny
-# bDMuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0VHJ1c3RlZFJvb3RHNC5jcmwwIAYDVR0g
-# BBkwFzAIBgZngQwBBAIwCwYJYIZIAYb9bAcBMA0GCSqGSIb3DQEBCwUAA4ICAQAX
-# zvsWgBz+Bz0RdnEwvb4LyLU0pn/N0IfFiBowf0/Dm1wGc/Do7oVMY2mhXZXjDNJQ
-# a8j00DNqhCT3t+s8G0iP5kvN2n7Jd2E4/iEIUBO41P5F448rSYJ59Ib61eoalhnd
-# 6ywFLerycvZTAz40y8S4F3/a+Z1jEMK/DMm/axFSgoR8n6c3nuZB9BfBwAQYK9FH
-# aoq2e26MHvVY9gCDA/JYsq7pGdogP8HRtrYfctSLANEBfHU16r3J05qX3kId+ZOc
-# zgj5kjatVB+NdADVZKON/gnZruMvNYY2o1f4MXRJDMdTSlOLh0HCn2cQLwQCqjFb
-# qrXuvTPSegOOzr4EWj7PtspIHBldNE2K9i697cvaiIo2p61Ed2p8xMJb82Yosn0z
-# 4y25xUbI7GIN/TpVfHIqQ6Ku/qjTY6hc3hsXMrS+U0yy+GWqAXam4ToWd2UQ1KYT
-# 70kZjE4YtL8Pbzg0c1ugMZyZZd/BdHLiRu7hAWE6bTEm4XYRkA6Tl4KSFLFk43es
-# aUeqGkH/wyW4N7OigizwJWeukcyIPbAvjSabnf7+Pu0VrFgoiovRDiyx3zEdmcif
-# /sYQsfch28bZeUz2rtY/9TCA6TD8dC3JE3rYkrhLULy7Dc90G6e8BlqmyIjlgp2+
-# VqsS9/wQD7yFylIz0scmbKvFoW2jNrbM1pD2T7m3XDCCBu0wggTVoAMCAQICEAqA
-# 7xhLjfEFgtHEdqeVdGgwDQYJKoZIhvcNAQELBQAwaTELMAkGA1UEBhMCVVMxFzAV
-# BgNVBAoTDkRpZ2lDZXJ0LCBJbmMuMUEwPwYDVQQDEzhEaWdpQ2VydCBUcnVzdGVk
-# IEc0IFRpbWVTdGFtcGluZyBSU0E0MDk2IFNIQTI1NiAyMDI1IENBMTAeFw0yNTA2
-# MDQwMDAwMDBaFw0zNjA5MDMyMzU5NTlaMGMxCzAJBgNVBAYTAlVTMRcwFQYDVQQK
-# Ew5EaWdpQ2VydCwgSW5jLjE7MDkGA1UEAxMyRGlnaUNlcnQgU0hBMjU2IFJTQTQw
-# OTYgVGltZXN0YW1wIFJlc3BvbmRlciAyMDI1IDEwggIiMA0GCSqGSIb3DQEBAQUA
-# A4ICDwAwggIKAoICAQDQRqwtEsae0OquYFazK1e6b1H/hnAKAd/KN8wZQjBjMqiZ
-# 3xTWcfsLwOvRxUwXcGx8AUjni6bz52fGTfr6PHRNv6T7zsf1Y/E3IU8kgNkeECqV
-# Q+3bzWYesFtkepErvUSbf+EIYLkrLKd6qJnuzK8Vcn0DvbDMemQFoxQ2Dsw4vEjo
-# T1FpS54dNApZfKY61HAldytxNM89PZXUP/5wWWURK+IfxiOg8W9lKMqzdIo7VA1R
-# 0V3Zp3DjjANwqAf4lEkTlCDQ0/fKJLKLkzGBTpx6EYevvOi7XOc4zyh1uSqgr6Un
-# bksIcFJqLbkIXIPbcNmA98Oskkkrvt6lPAw/p4oDSRZreiwB7x9ykrjS6GS3NR39
-# iTTFS+ENTqW8m6THuOmHHjQNC3zbJ6nJ6SXiLSvw4Smz8U07hqF+8CTXaETkVWz0
-# dVVZw7knh1WZXOLHgDvundrAtuvz0D3T+dYaNcwafsVCGZKUhQPL1naFKBy1p6ll
-# N3QgshRta6Eq4B40h5avMcpi54wm0i2ePZD5pPIssoszQyF4//3DoK2O65Uck5Wg
-# gn8O2klETsJ7u8xEehGifgJYi+6I03UuT1j7FnrqVrOzaQoVJOeeStPeldYRNMmS
-# F3voIgMFtNGh86w3ISHNm0IaadCKCkUe2LnwJKa8TIlwCUNVwppwn4D3/Pt5pwID
-# AQABo4IBlTCCAZEwDAYDVR0TAQH/BAIwADAdBgNVHQ4EFgQU5Dv88jHt/f3X85Fx
-# YxlQQ89hjOgwHwYDVR0jBBgwFoAU729TSunkBnx6yuKQVvYv1Ensy04wDgYDVR0P
-# AQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMIMIGVBggrBgEFBQcBAQSB
-# iDCBhTAkBggrBgEFBQcwAYYYaHR0cDovL29jc3AuZGlnaWNlcnQuY29tMF0GCCsG
-# AQUFBzAChlFodHRwOi8vY2FjZXJ0cy5kaWdpY2VydC5jb20vRGlnaUNlcnRUcnVz
-# dGVkRzRUaW1lU3RhbXBpbmdSU0E0MDk2U0hBMjU2MjAyNUNBMS5jcnQwXwYDVR0f
-# BFgwVjBUoFKgUIZOaHR0cDovL2NybDMuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0VHJ1
-# c3RlZEc0VGltZVN0YW1waW5nUlNBNDA5NlNIQTI1NjIwMjVDQTEuY3JsMCAGA1Ud
-# IAQZMBcwCAYGZ4EMAQQCMAsGCWCGSAGG/WwHATANBgkqhkiG9w0BAQsFAAOCAgEA
-# ZSqt8RwnBLmuYEHs0QhEnmNAciH45PYiT9s1i6UKtW+FERp8FgXRGQ/YAavXzWjZ
-# hY+hIfP2JkQ38U+wtJPBVBajYfrbIYG+Dui4I4PCvHpQuPqFgqp1PzC/ZRX4pvP/
-# ciZmUnthfAEP1HShTrY+2DE5qjzvZs7JIIgt0GCFD9ktx0LxxtRQ7vllKluHWiKk
-# 6FxRPyUPxAAYH2Vy1lNM4kzekd8oEARzFAWgeW3az2xejEWLNN4eKGxDJ8WDl/FQ
-# USntbjZ80FU3i54tpx5F/0Kr15zW/mJAxZMVBrTE2oi0fcI8VMbtoRAmaaslNXdC
-# G1+lqvP4FbrQ6IwSBXkZagHLhFU9HCrG/syTRLLhAezu/3Lr00GrJzPQFnCEH1Y5
-# 8678IgmfORBPC1JKkYaEt2OdDh4GmO0/5cHelAK2/gTlQJINqDr6JfwyYHXSd+V0
-# 8X1JUPvB4ILfJdmL+66Gp3CSBXG6IwXMZUXBhtCyIaehr0XkBoDIGMUG1dUtwq1q
-# mcwbdUfcSYCn+OwncVUXf53VJUNOaMWMts0VlRYxe5nK+At+DI96HAlXHAL5SlfY
-# xJ7La54i71McVWRP66bW+yERNpbJCjyCYG2j+bdpxo/1Cy4uPcU3AWVPGrbn5PhD
-# Bf3Froguzzhk++ami+r3Qrx5bIbY3TVzgiFI7Gq3zWcxggUUMIIFEAIBATA4MCQx
-# IjAgBgNVBAMMGVNtYXJ0TG9nQW5hbHl6ZXIgRGV2IENlcnQCEBUy2qFSt3KaSMr0
-# wjbbRvcwDQYJYIZIAWUDBAIBBQCggYQwGAYKKwYBBAGCNwIBDDEKMAigAoAAoQKA
-# ADAZBgkqhkiG9w0BCQMxDAYKKwYBBAGCNwIBBDAcBgorBgEEAYI3AgELMQ4wDAYK
-# KwYBBAGCNwIBFTAvBgkqhkiG9w0BCQQxIgQgDtA3Ul3pU834zhr2mfxXkWI+tcb1
-# gE5m7d7nXZaQF04wDQYJKoZIhvcNAQEBBQAEggEAdClWOCuNJwcbYJsKebcK3hpa
-# oqeR1mFkF4YQP6/vkGqdXOHjLwsI/QE2wEi5QWJ7fac6LihMzlSWnvTCN/cmH8Ta
-# sqw120nfc5tab8eDFymFRKdzBxodMO3FHcbWWQMAG9uwQYTKEun5H8k1b2p/4OYx
-# B8l/JkAYUfUYFoj1iCN5k4guMFOtNEA39U67taDBiVNPn5g4LQ0UFEAmeGTgG55I
-# lWQ2BeVi7iknxwMI7/y6p8tOUIEHrivUAHsmK5mKNXeFongPv13iFWJFO4/Mz7Js
-# JTZy+YiK75L1FjSxqbazFY1GC23F0xNE7O2CevWa8BxIeqxvOslwEhDxQTIfKaGC
-# AyYwggMiBgkqhkiG9w0BCQYxggMTMIIDDwIBATB9MGkxCzAJBgNVBAYTAlVTMRcw
-# FQYDVQQKEw5EaWdpQ2VydCwgSW5jLjFBMD8GA1UEAxM4RGlnaUNlcnQgVHJ1c3Rl
-# ZCBHNCBUaW1lU3RhbXBpbmcgUlNBNDA5NiBTSEEyNTYgMjAyNSBDQTECEAqA7xhL
-# jfEFgtHEdqeVdGgwDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZI
-# hvcNAQcBMBwGCSqGSIb3DQEJBTEPFw0yNTA2MjAwODUzMDlaMC8GCSqGSIb3DQEJ
-# BDEiBCDSEGmK/AKr4XqP8CKTdCXqQO9hXLoIf/UZRlsu4x9xWzANBgkqhkiG9w0B
-# AQEFAASCAgAl/0oM4UF6/yiAUEwDK9sKk7Yh/wrwYJNYVLStU4joEIkGZ0+T52kk
-# yIHhe3SlIqmxdJCEtlu4zKSwtIq1nsg/0FrvU22Jlijvxs9dRxb9hyVsEiV/Pjko
-# zmATh3O647eAACkzKtRzudU1OBpYAexAIy3jHb1Z9BPjCUY70I3T48UAx6Xc9/rh
-# hsTNJ3b7socbZQF3SArK7y0QM+5+3721bFdGM2+B9KOET7Ly83BhLOwHK1EneBLT
-# iTzFYx+WVVkgWzmdteMG6Nwip8IhiC4gcRZdBdsEU4tXKur7XPJQG+I4VizDbF1N
-# I7Cxj9+MVisLUXObVTG64UEHXSSG1fLbFytXUkqSEJv3wCNvm2XtZP8gnFykC1xQ
-# Sz11qpifSSb/m01+XH3/N0IE5c7CCdVIBaa8P5bnJLuXm9nghbn12iGfHRKiN797
-# hJL9vQ0nuuNpexXNVJR7RFSwV4N0qfyefNwknIL3RxqJrutaHqLpA8tSWvcGLj2G
-# Uspfy8uml49NaWCRi4uOzxGnbpClcRkYiYGq1vM3EGrktmfXm40WEWLCZxfZw+h4
-# BGCIcY57FFCqRfLSe0KFyyKnnqJeLk/zuVTKXi3fenLB4pibwcBvK1UeTa12Opif
-# SYI6uBMklSOSfboVElzChlMazw2IxRT0nADpaz3MLkVesJRBFerGXA==
-# SIG # End signature block
+# Ensure the script exits with the correct exit code
+$LASTEXITCODE = 0
+# If you want to use this function in a script, you can call it like this:
+# $logEntries = Get-LogEntries -Path "C:\path\to\your\logfile.log" -IncludeKeywords "ERROR" -StartTime (Get-Date).AddDays(-7) -EndTime (Get-Date) -ExportPath "C:\path\to\export.csv" -ExportFormat "CSV"
+# This will retrieve log entries from the specified log file, filter them by keywords and date range,
+# and export the results to a CSV file.
