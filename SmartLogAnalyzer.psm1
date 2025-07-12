@@ -7,7 +7,6 @@
 . "$PSScriptRoot\Private\Export-LogReport.ps1"
 . "$PSScriptRoot\Private\Protect-LogEntry.ps1"
 
-
 # Public function files
 . "$PSScriptRoot\Public\Get-LogEntries.ps1"
 . "$PSScriptRoot\Public\Get-LogSummary.ps1"
@@ -20,3 +19,9 @@ if ($IsWindows) {
 }
 
 # Exported functions
+Export-ModuleMember -Function `
+    Get-LogEntries, `
+    Get-LogSummary, `
+    Invoke-SmartAnalyzer, `
+    Get-SystemLogs, `
+    Show-LogAnalyzerUI
