@@ -1,0 +1,4 @@
+2025-07-14T13:00:00|Information|EventProvider|1234|All systems go
+2025-07-14T13:05:00|Error|Kernel|9999|Kernel panic
+2025-07-14T13:10:00|Warning|System|2001|Disk space low
+2025-07-14T13:15:00|Information|App|1001|System started

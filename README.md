@@ -81,32 +81,51 @@ Invoke-Pester -Script "Tests\SmartLogAnalyzer.Tests.ps1"
 ## 📁 Project Structure
 
 ```
-SLAnalyzer/
-├── Public/
-│   ├── Get-LogEntries.ps1
-│   ├── Get-LogSummary.ps1
-│   ├── Show-LogAnalyzerUI.ps1
-│   ├── Invoke-SmartAnalyzer.ps1
-│   └── Get-SystemLogs.ps1
-├── Private/
-│   ├── Convert-Timestamp.ps1
-│   ├── Format-LogEntry.ps1
-│   ├── Analyzers.Helper.ps1
-│   ├── Export-LogReport.ps1
-│   └── Protect-LogEntry.ps1
-├── GUI/
-│   └── Assets/
-│       └── banner.png, theme.config, etc.
-├── Tests/
-│   ├── SmartLogAnalyzer.Tests.ps1
-│   ├── Invoke-SmartAnalyzer.tests.ps1
-│   └── Sample.Logs/
-│       └── sample.test.log
-├── SmartLogAnalyzer.psd1
-├── SmartLogAnalyzer.psm1
-├── config.json
-├── README.md
-└── LICENSE
+C:.
+│   .gitignore
+│   config.json
+│   LICENSE.md
+│   README.md
+│   SmartLogAnalyzer.psd1
+│   SmartLogAnalyzer.psm1
+│
+├───.git
+│   ├───hooks
+│   ├───info
+│   ├───logs
+│   ├───objects
+├───GUI
+│   └───Assets
+│           banner.png
+│           SLAnalyzer.ico
+│           theme.config
+│
+├───Pester Test Suite
+│   ├───Sample Logs
+│   │       sample.logs
+│   │
+│   └───Tests
+│           Convert-Timestamp.test.ps1
+│           Get-LogEntries.Tests.ps1
+│           Get-LogSummary.Tests.ps1
+│           Get-SystemLogs.tests.ps1
+│           Invoke-SmartAnalyzer.test.ps1
+│           ShowLogAnalyzer.tests.ps1
+│
+├───Private
+│       Analyzers.Helper.ps1
+│       Convert-Timestamp.ps1
+│       Export-LogReport.ps1
+│       Format-LogEntry.ps1
+│       Protect-LogEntry.ps1
+│
+└───Public
+        Get-LogEntries.ps1
+        Get-LogSummary.ps1
+        Get-SystemLogs.ps1
+        Invoke-SmartAnalyzer.ps1
+        Show-LogAnalyzerUI.ps1
+
 ```
 
 ---

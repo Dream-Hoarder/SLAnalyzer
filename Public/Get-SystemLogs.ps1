@@ -15,18 +15,15 @@ function Get-SystemLogs {
         [string]$OutputPath
     )
 
-    # Detect OS
     $runningOnWindows = $PSVersionTable.OS -match 'Windows'
     $runningOnLinux = $PSVersionTable.OS -match 'Linux'
-
     $logs = @()
 
     if ($runningOnWindows) {
         try {
             if ($LogType -eq "Custom" -and $CustomPath -and (Test-Path $CustomPath)) {
                 $events = Get-WinEvent -Path $CustomPath -ErrorAction Stop
-            }
-            else {
+            } else {
                 $filter = @{
                     LogName   = if ($LogType -eq "All") { @("System", "Application", "Security") } else { $LogType }
                     StartTime = $StartTime
@@ -40,7 +37,7 @@ function Get-SystemLogs {
                     TimeCreated      = $evt.TimeCreated
                     LevelDisplayName = $evt.LevelDisplayName
                     ProviderName     = $evt.ProviderName
-                    Id               = $evt.Id
+                    EventId          = $evt.Id
                     Message          = $evt.Message
                 }
             }
@@ -52,19 +49,18 @@ function Get-SystemLogs {
                     $logs += [PSCustomObject]@{
                         TimeCreated      = $evt.TimeGenerated
                         LevelDisplayName = $evt.EntryType.ToString()
-                        Source           = $evt.Source
-                        InstanceId       = $evt.InstanceId
+                        ProviderName     = $evt.Source
+                        EventId          = $evt.InstanceId
                         Message          = $evt.Message
                     }
                 }
-            }
-            else {
+            } else {
                 throw "Failed to retrieve logs: unsupported log type or path"
             }
         }
     }
+
     elseif ($runningOnLinux) {
-        $logs = @()
         $journalOk = $false
         try {
             $journalCmd = "journalctl --no-pager --output=json"
@@ -74,29 +70,25 @@ function Get-SystemLogs {
             $journalOutput = bash -c $journalCmd
             foreach ($line in $journalOutput) {
                 if ($line.Trim()) {
-                    $obj = $null
                     try {
                         $obj = $line | ConvertFrom-Json
-                    } catch {
-                        # ignore malformed lines
-                    }
-                    if ($obj) {
-                        # Convert numeric priority to textual level if needed
                         $priorityMap = @{
-                            0 = 'Emergency'; 1 = 'Alert'; 2 = 'Critical'; 3 = 'Error'; 4 = 'Warning';
-                            5 = 'Notice'; 6 = 'Info'; 7 = 'Debug'
+                            0 = 'Emergency'; 1 = 'Alert'; 2 = 'Critical'; 3 = 'Error'
+                            4 = 'Warning';   5 = 'Notice'; 6 = 'Info';    7 = 'Debug'
                         }
                         $level = if ($priorityMap.ContainsKey($obj.PRIORITY)) { $priorityMap[$obj.PRIORITY] } else { 'Unknown' }
-
-                        # __REALTIME_TIMESTAMP is in microseconds since epoch; convert to datetime
                         $epoch = Get-Date "1970-01-01T00:00:00Z"
                         $timestamp = $epoch.AddMilliseconds($obj.__REALTIME_TIMESTAMP / 1000)
 
                         $logs += [PSCustomObject]@{
                             TimeCreated      = $timestamp
                             LevelDisplayName = $level
+                            ProviderName     = $obj.SYSLOG_IDENTIFIER
+                            EventId          = $null
                             Message          = $obj.MESSAGE
                         }
+                    } catch {
+                        # ignore malformed lines
                     }
                 }
             }
@@ -119,7 +111,7 @@ function Get-SystemLogs {
                             $year  = (Get-Date).Year
                             $timestamp = [datetime]::ParseExact("$month $day $year $time", "MMM d yyyy HH:mm:ss", $null)
                         } else {
-                            $timestamp = (Get-Date)
+                            $timestamp = Get-Date
                         }
 
                         $level = if ($line -match "(?i)error") { "Error" }
@@ -130,6 +122,8 @@ function Get-SystemLogs {
                         $logs += [PSCustomObject]@{
                             TimeCreated      = $timestamp
                             LevelDisplayName = $level
+                            ProviderName     = "syslog"
+                            EventId          = $null
                             Message          = $line
                         }
                     }
@@ -137,19 +131,20 @@ function Get-SystemLogs {
             }
         }
     }
+
     else {
         throw "Unsupported operating system."
     }
 
-    # Filter attention only if requested
+    # Attention filter
     if ($AttentionOnly) {
         $logs = $logs | Where-Object {
             $_.LevelDisplayName -match 'Error|Warning|Critical' -or
-            $_.Message -match '(fail|denied|unauthorized|critical|security)'
+            $_.Message -match '(?i)fail|denied|unauthorized|critical|security'
         }
     }
 
-    # Export if requested
+    # Export
     if ($OutputPath) {
         try {
             $logs | Export-Csv -Path $OutputPath -NoTypeInformation -Encoding UTF8 -Force
@@ -159,9 +154,7 @@ function Get-SystemLogs {
         }
     }
 
-    # Return raw objects for further processing or display
     return $logs
 }
 
-# Export the function for use in other scripts or modules
 Export-ModuleMember -Function Get-SystemLogs
