@@ -8,7 +8,7 @@ function Invoke-SmartAnalyzer {
         [string]$LogType = "System",
 
         [datetime]$StartTime = (Get-Date).AddHours(-1),
-        [datetime]$EndTime = (Get-Date),
+        [datetime]$EndTime   = (Get-Date),
 
         [string]$CustomPath,
 
@@ -37,8 +37,11 @@ function Invoke-SmartAnalyzer {
     )
 
     try {
+        $logEntries = @()
+        $sourcePath = $Path
+
         if ($FetchLogs) {
-            Write-Verbose "Fetching logs using Get-SystemLogs..."
+            Write-Verbose "📥 Fetching logs via Get-SystemLogs..."
 
             $logParams = @{
                 LogType        = $LogType
@@ -48,62 +51,68 @@ function Invoke-SmartAnalyzer {
                 Colorize       = $Colorize
             }
 
-            if ($CustomPath) {
-                $logParams['CustomPath'] = $CustomPath
-            }
-
-            if ($ExportPath) {
-                $logParams['OutputPath'] = $ExportPath
-            }
+            if ($CustomPath)  { $logParams.CustomPath = $CustomPath }
+            if ($ExportPath)  { $logParams.OutputPath = $ExportPath }
 
             $logEntries = Get-SystemLogs @logParams
-            $Path = $ExportPath  # Fallback path for export/report generation
-        } else {
+            $sourcePath = $ExportPath
+        }
+        else {
             if (-not (Test-Path $Path)) {
-                throw "File not found: $Path"
+                throw "❌ File not found: $Path"
             }
 
-            Write-Verbose "Reading logs from path: $Path"
-            $logEntries = Import-Csv $Path
+            Write-Verbose "📂 Importing log entries from: $Path"
+            $logEntries = Import-Csv -Path $Path -ErrorAction Stop
         }
 
-        # Apply filters for Get-LogEntries if not already processed
-        $params = @{ Path = $Path }
-        if ($IncludeKeywords)    { $params.IncludeKeywords = $IncludeKeywords }
-        if ($ExcludeKeywords)    { $params.ExcludeKeywords = $ExcludeKeywords }
-        if ($StartTime)          { $params.StartTime = $StartTime }
-        if ($EndTime)            { $params.EndTime = $EndTime }
-        if ($SortOrder)          { $params.SortOrder = $SortOrder }
-        if ($EventId)            { $params.EventId = $EventId }
-        if ($Level)              { $params.Level = $Level }
-        if ($ProviderName)       { $params.ProviderName = $ProviderName }
-        if ($ExportPath)         { $params.ExportPath = $ExportPath }
-        if ($ExportFormat)       { $params.ExportFormat = $ExportFormat }
-
+        # Apply extra filtering if raw log source was loaded
         if (-not $FetchLogs) {
-            $logEntries = Get-LogEntries @params
+            Write-Verbose "🔍 Applying filters via Get-LogEntries..."
+
+            $filterParams = @{
+                Path           = $Path
+                IncludeKeywords = $IncludeKeywords
+                ExcludeKeywords = $ExcludeKeywords
+                StartTime       = $StartTime
+                EndTime         = $EndTime
+                SortOrder       = $SortOrder
+                EventId         = $EventId
+                Level           = $Level
+                ProviderName    = $ProviderName
+                Redact          = $RedactSensitiveData
+                ExportPath      = $ExportPath
+                ExportFormat    = $ExportFormat
+                Colorize        = $Colorize
+            }
+
+            $logEntries = Get-LogEntries @filterParams
         }
 
+        Write-Verbose "📊 Generating summary..."
         $summary = Get-LogSummary -LogLines $logEntries
 
-        # Conditionally export report
-        if ($ReportPath -and $PSCmdlet.ShouldProcess($ReportPath, "Export SmartLogAnalyzer Report")) {
+        if ($ReportPath -and $PSCmdlet.ShouldProcess($ReportPath, "Export Smart Analyzer Report")) {
+            Write-Verbose "📝 Exporting report to $ReportPath..."
+
             Export-LogReport -Summary $summary `
                              -Entries $logEntries `
-                             -SourcePath $Path `
+                             -SourcePath $sourcePath `
                              -OutputPath $ReportPath `
                              -Format $ReportFormat `
                              -Redact:$RedactSensitiveData `
                              -IncludeMetadata:$IncludeMetadata `
                              -GenerateRedactionLog:$GenerateRedactionLog
-            Write-Information "📄 Report exported to: $ReportPath"
+
+            Write-Host "✅ Report saved to $ReportPath" -ForegroundColor Green
         }
 
         return [pscustomobject]@{
             Entries = $logEntries
             Summary = $summary
         }
-    } catch {
+    }
+    catch {
         Write-Error $_.Exception.Message
         throw "❌ Smart Analyzer failed. See error details above."
     }

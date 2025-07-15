@@ -2,16 +2,12 @@ function Protect-Message {
     param (
         [string]$Message
     )
-    # Define sensitive patterns to redact
+    # Refined sensitive data patterns with boundary-aware redaction
     $patterns = @(
-        'password\s*\S+',
-        'token\s*\S+',
-        'secret\s*\S+',
-        'apikey\s*\S+',
-        'api_key\s*\S+'
+        '(?i)\b(password|token|secret|apikey|api_key)\b\s*[:=]?\s*\S+'
     )
-    foreach ($pat in $patterns) {
-        $Message = [regex]::Replace($Message, $pat, '[REDACTED]', 'IgnoreCase')
+    foreach ($pattern in $patterns) {
+        $Message = [regex]::Replace($Message, $pattern, '[REDACTED]', 'IgnoreCase')
     }
     return $Message
 }
@@ -27,30 +23,38 @@ function Format-LogEntry {
         [switch]$Redact
     )
 
-    # Try custom regex rules from config or input
-    foreach ($pattern in $CustomPatterns) {
-        if ($Line -match $pattern) {
-            $timestamp = if ($matches['Time']) { $matches['Time'] } else { $null }
-            $level     = if ($matches['Level']) { $matches['Level'] } else { 'Info' }
-            $provider  = if ($matches['Source']) { $matches['Source'] } else { 'Unknown' }
-            $message   = if ($matches['Message']) { $matches['Message'] } else { $Line }
+    # --- Custom Pattern Matching ---
+    if ($CustomPatterns.Count -gt 0) {
+        foreach ($pattern in $CustomPatterns) {
+            if ($Line -match $pattern) {
+                $timestamp = $matches['Time']
+                $level     = $matches['Level']    ?? 'Info'
+                $provider  = $matches['Source']   ?? 'Unknown'
+                $message   = $matches['Message']  ?? $Line
 
-            if ($Redact) {
-                $message = Protect-Message -Message $message
-            }
+                if ($Redact) {
+                    $message = Protect-Message -Message $message
+                }
 
-            return [PSCustomObject]@{
-                Timestamp = $timestamp
-                Level     = $level
-                Provider  = $provider
-                Message   = $message
+                return [PSCustomObject]@{
+                    Timestamp = $timestamp
+                    Level     = $level
+                    Provider  = $provider
+                    Message   = $message
+                }
             }
         }
     }
 
-    # Fallback 1: SmartLogAnalyzer default format
-    if ($Line -match '^(?<Time>[\d\-\s:]+) \[(?<Level>[^\]]+)\] (?<Provider>[^:]+): (?<Message>.+)$') {
-        $timestamp = [datetime]::ParseExact($matches['Time'], 'yyyy-MM-dd HH:mm:ss', $null)
+    # --- SmartLogAnalyzer Default ---
+    if ($Line -match '^(?<Time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(?<Level>[^\]]+)\] (?<Provider>[^:]+): (?<Message>.+)$') {
+        $timestamp = $null
+        try {
+            [datetime]::TryParseExact($matches['Time'], 'yyyy-MM-dd HH:mm:ss', $null, 'None', [ref]$timestamp) | Out-Null
+        } catch {
+            $timestamp = $null
+        }
+
         $level = $matches['Level']
         $provider = $matches['Provider']
         $message = $matches['Message']
@@ -67,11 +71,17 @@ function Format-LogEntry {
         }
     }
 
-    # Fallback 2: Syslog-like format
+    # --- Syslog-like ---
     if ($Line -match '^(?<Month>\w{3}) +(?<Day>\d{1,2}) (?<Time>\d{2}:\d{2}:\d{2}) (?<Host>\S+) (?<Source>[^:]+): (?<Message>.+)$') {
-        $year = (Get-Date).Year
-        $datetime = "$($matches['Month']) $($matches['Day']) $year $($matches['Time'])"
-        $timestamp = [datetime]::ParseExact($datetime, 'MMM dd yyyy HH:mm:ss', $null)
+        $timestamp = $null
+        try {
+            $year = (Get-Date).Year
+            $datetime = "$($matches['Month']) $($matches['Day']) $year $($matches['Time'])"
+            [datetime]::TryParseExact($datetime, 'MMM dd yyyy HH:mm:ss', $null, 'None', [ref]$timestamp) | Out-Null
+        } catch {
+            $timestamp = $null
+        }
+
         $level = 'Info'
         $provider = $matches['Source']
         $message = $matches['Message']
@@ -88,10 +98,6 @@ function Format-LogEntry {
         }
     }
 
-    # No match fallback
+    # --- No match fallback ---
     return $null
 }
-
-
-
-

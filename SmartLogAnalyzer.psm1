@@ -6,6 +6,8 @@
 . "$PSScriptRoot\Private\Format-LogEntry.ps1"
 . "$PSScriptRoot\Private\Export-LogReport.ps1"
 . "$PSScriptRoot\Private\Protect-LogEntry.ps1"
+. "$PSScriptRoot\Private\Get-HtmlTemplate.ps1"
+. "$PSScriptRoot\Private\Format-HtmlString.ps1"
 
 # Public function files
 . "$PSScriptRoot\Public\Get-LogEntries.ps1"

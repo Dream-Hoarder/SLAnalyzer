@@ -14,9 +14,9 @@ function Get-LogSummary {
             DebugCount     = 0
             FatalCount     = 0
             OtherCount     = 0
+            FirstTimestamp = $null
+            LastTimestamp  = $null
         }
-
-        $timestamps = New-Object System.Collections.Generic.List[datetime]
 
         $datetimeFormats = @(
             'yyyy-MM-dd HH:mm:ss',
@@ -33,31 +33,37 @@ function Get-LogSummary {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
 
             $summary.TotalLines++
+            $lcLine = $line.ToLowerInvariant()
 
-            $matched = $false
-
-            switch -Regex ($line.ToLower()) {
-                'fatal'  { $summary.FatalCount++;  $matched = $true; break }
-                'error'  { $summary.ErrorCount++;  $matched = $true; break }
-                'warn'   { $summary.WarningCount++;$matched = $true; break }
-                'info'   { $summary.InfoCount++;   $matched = $true; break }
-                'debug'  { $summary.DebugCount++;  $matched = $true; break }
-            }
-
-            if (-not $matched) {
+            if ($lcLine -match 'fatal') {
+                $summary.FatalCount++
+            } elseif ($lcLine -match 'error') {
+                $summary.ErrorCount++
+            } elseif ($lcLine -match 'warn') {
+                $summary.WarningCount++
+            } elseif ($lcLine -match 'info') {
+                $summary.InfoCount++
+            } elseif ($lcLine -match 'debug') {
+                $summary.DebugCount++
+            } else {
                 $summary.OtherCount++
             }
 
-            # Try to extract and parse a timestamp from the line
             if ($line -match '(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?(?:Z|[\+\-]\d{2}:\d{2})?)') {
                 $timestampCandidate = $matches[1]
+
                 foreach ($fmt in $datetimeFormats) {
                     try {
                         $parsed = [datetime]::ParseExact($timestampCandidate, $fmt, $null)
-                        $timestamps.Add($parsed)
+                        if (-not $summary.FirstTimestamp -or $parsed -lt $summary.FirstTimestamp) {
+                            $summary.FirstTimestamp = $parsed
+                        }
+                        if (-not $summary.LastTimestamp -or $parsed -gt $summary.LastTimestamp) {
+                            $summary.LastTimestamp = $parsed
+                        }
                         break
                     } catch {
-                        # Try next format
+                        continue
                     }
                 }
             }
@@ -65,9 +71,6 @@ function Get-LogSummary {
     }
 
     end {
-        $summary.FirstTimestamp = if ($timestamps.Count -gt 0) { $timestamps | Sort-Object | Select-Object -First 1 } else { $null }
-        $summary.LastTimestamp  = if ($timestamps.Count -gt 0) { $timestamps | Sort-Object | Select-Object -Last 1 } else { $null }
-
         return [pscustomobject]$summary
     }
 }
