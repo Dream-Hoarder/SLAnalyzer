@@ -1,6 +1,6 @@
 @{
     RootModule        = 'SmartLogAnalyzer.psm1'
-    ModuleVersion     = '1.1.0'
+    ModuleVersion     = '1.2.0'
     GUID              = '9f0f09d3-b15c-4a9c-b01d-3d19d06e6f21'
     Author            = 'Willie Bonner'
     CompanyName       = 'Independent'
@@ -12,8 +12,8 @@
         'Get-LogEntries',
         'Get-LogSummary',
         'Invoke-SmartAnalyzer',
-        'Show-LogAnalyzerUI',
-        'Get-SystemLogs'
+        'Get-SystemLogs',
+        'Show-LogAnalyzerUI' # Loaded conditionally on Windows, but safe to export
     )
 
     FileList = @(
@@ -27,6 +27,9 @@
         'Private\Protect-LogEntry.ps1',
         'Private\Convert-Timestamp.ps1',
         'Private\Format-LogEntry.ps1',
+        'Private\Export-LogReport.ps1',
+        'Private\Get-HtmlTemplate.ps1',
+        'Private\Format-HtmlString.ps1',
         'GUI\Assets\Slanalyzer.ico',
         'GUI\Assets\banner.png',
         'GUI\Assets\theme.config',
@@ -35,7 +38,7 @@
 
     PrivateData = @{
         PSData = @{
-            Tags         = @(
+            Tags = @(
                 'logs', 'parser', 'analyzer', 'monitoring',
                 'cross-platform', 'PowerShell', 'ETL', 'journalctl',
                 'GUI', 'colorize', 'attention', 'cybersecurity'
@@ -55,5 +58,3 @@ v1.1.0 - Major feature release:
         }
     }
 }
-
-

@@ -5,7 +5,7 @@ Import-Module $modulePath -Force -ErrorAction Stop
 
 Describe "Get-LogEntries" {
 
-    $sampleLogPath = "$PSScriptRoot\SampleLogs\sample.log"
+    $sampleLogPath = Join-Path (Split-Path $PSScriptRoot -Parent) "SampleLogs\sample.log"
     BeforeAll {
         # Sample log creation for test purposes
         if (-not (Test-Path $sampleLogPath)) {
