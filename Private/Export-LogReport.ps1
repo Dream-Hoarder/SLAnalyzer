@@ -1,14 +1,17 @@
 function Export-LogReport {
     [CmdletBinding()]
     param (
-        [Parameter(Mandatory)]
+        [Parameter()]
         [hashtable]$Summary,
 
-        [Parameter(Mandatory)]
-        [array]$Entries,
+        [Parameter()]
+        [System.Object[]]$Entries,
 
-        [Parameter(Mandatory)]
-        [string]$SourcePath,
+        [Parameter()]
+        [System.Object[]]$LogLines,  # Alternative parameter name for compatibility
+
+        [Parameter()]
+        [string]$SourcePath = "Unknown",
 
         [Parameter(Mandatory)]
         [string]$OutputPath,
@@ -20,6 +23,42 @@ function Export-LogReport {
         [switch]$IncludeMetadata,
         [switch]$GenerateRedactionLog
     )
+
+# Handle both Entries and LogLines parameter names for compatibility
+if (-not $Entries -and $LogLines) {
+    $Entries = $LogLines
+}
+
+# Validate that we have data to work with
+if (-not $Entries -or $Entries.Count -eq 0) {
+    throw "Either Entries or LogLines parameter must contain a non-empty array."
+}
+
+# Generate summary if not provided
+if (-not $Summary) {
+    try {
+        Write-Verbose "Generating summary from provided entries..."
+        $Summary = @{}
+        $summaryObj = Get-LogSummary -LogLines $Entries
+        if ($summaryObj) {
+            $Summary = @{
+                TotalLines = $summaryObj.TotalLines
+                ErrorCount = $summaryObj.ErrorCount
+                WarningCount = $summaryObj.WarningCount
+                InfoCount = $summaryObj.InfoCount
+                DebugCount = $summaryObj.DebugCount
+                FatalCount = $summaryObj.FatalCount
+                OtherCount = $summaryObj.OtherCount
+                FirstTimestamp = $summaryObj.FirstTimestamp
+                LastTimestamp = $summaryObj.LastTimestamp
+            }
+        }
+    } catch {
+        Write-Warning "Failed to generate summary: $($_.Exception.Message)"
+        $Summary = @{ Note = "Summary generation failed" }
+    }
+}
+
 
     try {
         $moduleVersion = '1.0.0'

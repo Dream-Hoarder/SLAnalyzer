@@ -15,8 +15,17 @@ function Get-SystemLogs {
         [string]$OutputPath
     )
 
-    $onWindows = $PSVersionTable.OS -match 'Windows'
-    $onLinux   = $PSVersionTable.OS -match 'Linux'
+    # Determine OS - compatible with both PowerShell 5.1 and 7+
+    $onWindows = if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $IsWindows
+    } else {
+        $env:OS -eq 'Windows_NT'
+    }
+    $onLinux = if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $IsLinux
+    } else {
+        $false  # PowerShell 5.1 only runs on Windows
+    }
     $logs = [System.Collections.Generic.List[object]]::new()
 
     if ($onWindows) {
@@ -29,6 +38,17 @@ function Get-SystemLogs {
 
             foreach ($source in $logSources) {
                 try {
+                    # Special handling for Security log - requires elevated privileges
+                    if ($source -eq "Security") {
+                        $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+                        $isElevated = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                        
+                        if (-not $isElevated) {
+                            Write-Warning "⚠️ Security log requires elevated privileges. Skipping Security log. Run PowerShell as Administrator to access Security logs."
+                            continue
+                        }
+                    }
+
                     $events = if ($LogType -eq "Custom") {
                         Get-WinEvent -Path $source -ErrorAction Stop
                     } else {
@@ -40,35 +60,74 @@ function Get-SystemLogs {
                     }
 
                     foreach ($evt in $events) {
+                        # Format the message to be more user-friendly
+                        $formattedMessage = try {
+                            Format-WindowsEventMessage -EventObject $evt
+                        } catch {
+                            # Fallback to original message with XML cleanup
+                            if ($evt.Message) {
+                                $evt.Message -replace '<[^>]+>', ''
+                            } else {
+                                "Event $($evt.Id) from $($evt.ProviderName)"
+                            }
+                        }
+                        
                         $logs.Add([PSCustomObject]@{
                             TimeCreated      = $evt.TimeCreated
                             LevelDisplayName = $evt.LevelDisplayName
                             ProviderName     = $evt.ProviderName
                             EventId          = $evt.Id
-                            Message          = $evt.Message
+                            Message          = $formattedMessage
+                            RawMessage       = $evt.Message  # Keep original for debugging
                         })
                     }
+                    
+                    # Safe count handling to avoid "Count property not found" warnings
+                    $eventCount = if ($events) { 
+                        if ($events -is [array]) { $events.Count } 
+                        elseif ($events.Count) { $events.Count }
+                        else { 1 }
+                    } else { 0 }
+                    Write-Verbose "✅ Successfully retrieved $eventCount events from $source log"
                 } catch {
-                    Write-Warning "⚠️ Get-WinEvent failed for $source, trying fallback..."
+                    Write-Warning "⚠️ Get-WinEvent failed for $source`: $($_.Exception.Message)"
+                    Write-Verbose "Attempting fallback method for $source..."
 
-                    if ($source -in @("System", "Application", "Security")) {
-                        $fallbackEvents = Get-EventLog -LogName $source -After $StartTime -Before $EndTime -ErrorAction Stop
-                        foreach ($evt in $fallbackEvents) {
-                            $logs.Add([PSCustomObject]@{
-                                TimeCreated      = $evt.TimeGenerated
-                                LevelDisplayName = $evt.EntryType.ToString()
-                                ProviderName     = $evt.Source
-                                EventId          = $evt.InstanceId
-                                Message          = $evt.Message
-                            })
+                    try {
+                        if ($source -in @("System", "Application", "Security")) {
+                            # Additional check for Security log in fallback
+                            if ($source -eq "Security") {
+                                $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+                                $isElevated = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                                
+                                if (-not $isElevated) {
+                                    Write-Warning "⚠️ Security log fallback also requires elevated privileges. Skipping Security log."
+                                    continue
+                                }
+                            }
+                            
+                            $fallbackEvents = Get-EventLog -LogName $source -After $StartTime -Before $EndTime -ErrorAction Stop
+                            foreach ($evt in $fallbackEvents) {
+                                $logs.Add([PSCustomObject]@{
+                                    TimeCreated      = $evt.TimeGenerated
+                                    LevelDisplayName = $evt.EntryType.ToString()
+                                    ProviderName     = $evt.Source
+                                    EventId          = $evt.InstanceId
+                                    Message          = $evt.Message
+                                })
+                            }
+                            Write-Verbose "[OK] Fallback successful for $source - retrieved $($fallbackEvents.Count) events"
+                        } else {
+                            Write-Warning "[WARN] No fallback available for log source: $source"
                         }
-                    } else {
-                        throw "❌ Unsupported log source or fallback failed: $source"
+                    } catch {
+                        Write-Warning "[WARN] Both primary and fallback methods failed for $source`: $($_.Exception.Message)"
+                        # Continue processing other log sources instead of failing completely
                     }
                 }
             }
         } catch {
-            throw "❌ Failed to retrieve Windows logs: $_"
+            throw "[ERROR] Failed to retrieve Windows logs: $_"
         }
 
     } elseif ($onLinux) {
@@ -147,7 +206,7 @@ function Get-SystemLogs {
         }
 
     } else {
-        throw "❌ Unsupported operating system."
+        throw "[ERROR] Unsupported operating system."
     }
 
     if ($AttentionOnly) {

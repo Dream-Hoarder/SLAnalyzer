@@ -80,9 +80,9 @@ function Get-LogEntries {
                     (!($ProviderName)  -or $ProviderName -contains $_.ProviderName)
                 }
 
-                $parsed = foreach ($e in $events) {
+                foreach ($e in $events) {
                     $message = if ($Redact) { Protect-Message -Message $e.Message } else { $e.Message }
-                    [PSCustomObject]@{
+                    $parsedEntry = [PSCustomObject]@{
                         Timestamp = $e.TimeCreated
                         Level     = $e.LevelDisplayName
                         Provider  = $e.ProviderName
@@ -90,9 +90,8 @@ function Get-LogEntries {
                         Message   = $message
                         RawLine   = $e.ToXml()
                     }
+                    $allParsedEntries.Add($parsedEntry)
                 }
-
-                $allParsedEntries.AddRange($parsed)
             } catch {
                 throw "❌ Failed to parse Windows event log from '$currentPath': $_"
             }
@@ -147,7 +146,7 @@ function Get-LogEntries {
     $finalEntries = if ($SortOrder -eq "Reverse") {
         $finalEntries | Sort-Object Timestamp -Descending
     } else {
-        $finalEntries | Sort-Object Timestamp -Ascending
+        $finalEntries | Sort-Object Timestamp
     }
 
     if ($Tail) {

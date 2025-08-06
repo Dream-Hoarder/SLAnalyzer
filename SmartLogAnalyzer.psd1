@@ -5,7 +5,7 @@
     Author            = 'Willie Bonner'
     CompanyName       = 'Independent'
     Description       = 'SmartLogAnalyzer helps sysadmins and developers parse and analyze logs intelligently across platforms with optional GUI.'
-    PowerShellVersion = '7.0'
+    PowerShellVersion = '5.1'
     CompatiblePSEditions = @('Core', 'Desktop')
 
     FunctionsToExport = @(

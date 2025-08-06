@@ -1,163 +1,96 @@
-# Convert-Timestamp.ps1 (Fixed and Improved)
+# Requires -Module Pester
+# File: Convert-Timestamp.tests.ps1
 
-# Regex patterns (unchanged)
-$timestampPatterns = @(
-    '\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?(?:Z|[+-]\d{2}:\d{2})?',
-    '[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}',
-    '\d{2}/\d{2}/\d{4}\s+\d{2}:\d{2}:\d{2}(?:\s*[AP]M)?',
-    '\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\s*[AP]M)?',
-    '\d{2}/\d{2}/\d{4}',
-    '\d{4}/\d{2}/\d{2}'
-)
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$privateFunctionPath = Join-Path $here "..\..\Private\Convert-Timestamp.ps1"
 
-$Script:LogLineRegex = [regex]::new(
-    '(?<Timestamp>' + ($timestampPatterns -join '|') + ')',
-    [System.Text.RegularExpressions.RegexOptions]::Compiled
-)
+# Dot-source the private function directly for testing
+. $privateFunctionPath
 
-# Try exact formats
-function Invoke-TryParseExactFormats {
-    param (
-        [string]$TimestampText,
-        [System.Globalization.CultureInfo]$Culture
-    )
+Describe "Convert-Timestamp" {
 
-    $formats = @(
-        @{ Format = "o"; Style = [System.Globalization.DateTimeStyles]::RoundtripKind },
-        @{ Format = "yyyy-MM-ddTHH:mm:ss.ffffffZ"; Style = [System.Globalization.DateTimeStyles]::RoundtripKind },
-        @{ Format = "yyyy-MM-ddTHH:mm:ss.ffffff"; Style = [System.Globalization.DateTimeStyles]::AssumeUniversal },
-        @{ Format = "yyyy-MM-ddTHH:mm:ss.fffZ"; Style = [System.Globalization.DateTimeStyles]::RoundtripKind },
-        @{ Format = "yyyy-MM-ddTHH:mm:ss.fff"; Style = [System.Globalization.DateTimeStyles]::AssumeUniversal },
-        @{ Format = "yyyy-MM-ddTHH:mm:ssZ"; Style = [System.Globalization.DateTimeStyles]::AssumeUniversal },
-        @{ Format = "yyyy-MM-ddTHH:mm:ss"; Style = [System.Globalization.DateTimeStyles]::AssumeUniversal },
-        @{ Format = "yyyy-MM-dd HH:mm:ss.fff"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "yyyy-MM-dd HH:mm:ss"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "MM/dd/yyyy HH:mm:ss.fff"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "MM/dd/yyyy HH:mm:ss"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "dd/MM/yyyy HH:mm:ss.fff"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "dd/MM/yyyy HH:mm:ss"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "MM/dd/yyyy hh:mm:ss tt"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "dd/MM/yyyy hh:mm:ss tt"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "MM/dd/yyyy"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "dd/MM/yyyy"; Style = [System.Globalization.DateTimeStyles]::None },
-        @{ Format = "yyyy/MM/dd"; Style = [System.Globalization.DateTimeStyles]::None }
-    )
+    Context "Standard ISO and Extended Formats" {
+        It "Parses ISO8601 'o' format correctly" {
+            $testString = "2025-07-14T13:45:30.0000000Z"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
+        }
 
-    foreach ($entry in $formats) {
-        $parsed = $null
-        if ([datetime]::TryParseExact($TimestampText, $entry.Format, $Culture, $entry.Style, [ref]$parsed) -and $parsed) {
-            return $parsed.ToUniversalTime()
+        It "Parses 'yyyy-MM-dd HH:mm:ss' correctly" {
+            $testString = "2025-07-14 13:45:30"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
+        }
+
+        It "Parses 'yyyy-MM-ddTHH:mm:ssZ' format correctly" {
+            $testString = "2025-07-14T13:45:30Z"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result.Kind | Should -Be "Local"
         }
     }
 
-    return $null
-}
+    Context "Culture-specific formats" {
+        It "Parses US-style date MM/dd/yyyy" {
+            $testString = "07/14/2025"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
+        }
 
-# Syslog parser
-function Invoke-TryParseSyslog {
-    param (
-        [string]$TimestampText,
-        [System.Globalization.CultureInfo]$Culture,
-        [int]$CurrentYear = (Get-Date).Year
-    )
-
-    $syslogFormats = @("MMM d HH:mm:ss", "MMM dd HH:mm:ss")
-
-    foreach ($fmt in $syslogFormats) {
-        $syslogResult = $null
-        if ([datetime]::TryParseExact($TimestampText, $fmt, $Culture, [System.Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$syslogResult) -and $syslogResult) {
-            try {
-                return (Get-Date -Year $CurrentYear -Month $syslogResult.Month -Day $syslogResult.Day `
-                             -Hour $syslogResult.Hour -Minute $syslogResult.Minute -Second $syslogResult.Second).ToUniversalTime()
-            } catch {
-                Write-Verbose "Syslog reconstruction failed: $_"
-            }
+        It "Parses UK-style date dd/MM/yyyy with Culture 'en-GB'" {
+            $testString = "14/07/2025"
+            $culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-GB')
+            $result = Convert-Timestamp -TimestampString $testString -Culture $culture
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
         }
     }
 
-    return $null
-}
-
-# Main timestamp converter
-function Convert-Timestamp {
-    [CmdletBinding()]
-    param (
-        [Parameter(ValueFromPipeline = $true)]
-        [string]$TimestampString,
-
-        [Parameter()]
-        [System.Globalization.CultureInfo]$Culture = [System.Globalization.CultureInfo]::GetCultureInfo('en-US'),
-
-        [Parameter()]
-        [int]$TestYear
-    )
-
-    process {
-        if ([string]::IsNullOrWhiteSpace($TimestampString)) {
-            return $null
+    Context "Syslog-style formats (MMM dd HH:mm:ss)" {
+        It "Parses 'Jul 14 13:45:30' using current year" {
+            $testString = "Jul 14 13:45:30"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result.Year | Should -Be (Get-Date).Year
+            $result.Hour | Should -Be 13
         }
 
-        try {
-            $result = Invoke-TryParseExactFormats -TimestampText $TimestampString -Culture $Culture
-            if ($result) { return $result }
-
-            if ($PSBoundParameters.ContainsKey('TestYear')) {
-                $result = Invoke-TryParseSyslog -TimestampText $TimestampString -Culture $Culture -CurrentYear $TestYear
-            } else {
-                $result = Invoke-TryParseSyslog -TimestampText $TimestampString -Culture $Culture
-            }
-
-            if ($result) { return $result }
-
-            $fallback = $null
-            if ([datetime]::TryParse($TimestampString, $Culture, [System.Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$fallback) -and $fallback) {
-                return $fallback.ToUniversalTime()
-            }
-
-            return $null
-        } catch {
-            Write-Verbose "❌ Exception while parsing timestamp: '$TimestampString' - $_"
-            return $null
+        It "Parses single-digit days like 'Jul  3 04:01:02'" {
+            $testString = "Jul  3 04:01:02"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
         }
     }
-}
 
-# Enhanced log line parser
-function ConvertFrom-LogEntry {
-    [CmdletBinding()]
-    param (
-        [Parameter(Mandatory, ValueFromPipeline)]
-        [string]$LogLine
-    )
+    Context "Ambiguous or fallback formats" {
+        It "Returns null for empty input" {
+            $result = Convert-Timestamp -TimestampString ""
+            $result | Should -Be $null
+        }
 
-    process {
-        try {
-            $match = $Script:LogLineRegex.Match($LogLine)
-            if (-not $match.Success) {
-                Write-Verbose "No timestamp match found in line: $LogLine"
-                return [PSCustomObject]@{
-                    Timestamp = $null
-                    Level     = "UNPARSEABLE"
-                    Message   = $LogLine
-                    RawLine   = $LogLine
-                }
-            }
+        It "Returns null for whitespace-only input" {
+            $result = Convert-Timestamp -TimestampString "   "
+            $result | Should -Be $null
+        }
 
-            $timestampString = $match.Groups["Timestamp"].Value.Trim()
-            $parsedTimestamp = Convert-Timestamp -TimestampString $timestampString
-
-            if (-not $parsedTimestamp) {
-                Write-Verbose "Failed to parse matched timestamp: '$timestampString'"
-            }
-        } catch {
-            Write-Verbose "Exception while parsing log line: '$LogLine' - $_"
-            return [PSCustomObject]@{
-                Timestamp = $null
-                Level     = "UNPARSEABLE"
-                Message   = $LogLine
-                RawLine   = $LogLine
-            }   
-            $levelMatch
+        It "Returns null for unparseable string" {
+            $testString = "not a timestamp"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Be $null
         }
     }
+
+    Context "Generic DateTime fallback" {
+        It "Parses loosely formatted date if all others fail" {
+            $testString = "Monday, July 14, 2025"
+            $result = Convert-Timestamp -TimestampString $testString
+            $result | Should -Not -Be $null
+            $result | Should -BeOfType "datetime"
+        }
+    }
+
 }

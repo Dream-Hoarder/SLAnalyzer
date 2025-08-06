@@ -137,16 +137,16 @@ function Convert-LinesOrder {
 # Utility messages
 function Write-Info {
     param ([string]$Message)
-    Write-Host "ℹ️  $Message" -ForegroundColor Cyan
+    Write-Host "[INFO] $Message" -ForegroundColor Cyan
 }
 
 function Write-WarningMessage {
     param ([string]$Message)
-    Write-Warning "⚠️  $Message"
+    Write-Warning "[WARN] $Message"
 }
 
 function Write-ErrorMessage {
     param ([string]$Message)
-    Write-Host "❌  $Message" -ForegroundColor Red
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
 }
 

@@ -16,7 +16,14 @@
 . "$PSScriptRoot\Public\Get-SystemLogs.ps1"
 
 # --- Conditionally load Windows UI ---
-if ($IsWindows) {
+# Compatible with both PowerShell 5.1 and 7+
+$isWindowsOS = if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $IsWindows
+} else {
+    $env:OS -eq 'Windows_NT'
+}
+
+if ($isWindowsOS) {
     . "$PSScriptRoot\Public\Show-LogAnalyzerUI.ps1"
 }
 
@@ -29,7 +36,7 @@ $exportedFunctions = @(
 )
 
 # Export Show-LogAnalyzerUI only on Windows
-if ($IsWindows) {
+if ($isWindowsOS) {
     $exportedFunctions += 'Show-LogAnalyzerUI'
 }
 

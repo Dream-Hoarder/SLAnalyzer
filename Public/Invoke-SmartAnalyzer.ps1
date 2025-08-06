@@ -41,7 +41,7 @@ function Invoke-SmartAnalyzer {
         $sourcePath = $Path
 
         if ($FetchLogs) {
-            Write-Verbose "📥 Fetching logs via Get-SystemLogs..."
+            Write-Verbose "[INFO] Fetching logs via Get-SystemLogs..."
 
             $logParams = @{
                 LogType        = $LogType
@@ -59,16 +59,16 @@ function Invoke-SmartAnalyzer {
         }
         else {
             if (-not (Test-Path $Path)) {
-                throw "❌ File not found: $Path"
+                throw "[ERROR] File not found: $Path"
             }
 
-            Write-Verbose "📂 Importing log entries from: $Path"
+            Write-Verbose "[INFO] Importing log entries from: $Path"
             $logEntries = Import-Csv -Path $Path -ErrorAction Stop
         }
 
         # Apply extra filtering if raw log source was loaded
         if (-not $FetchLogs) {
-            Write-Verbose "🔍 Applying filters via Get-LogEntries..."
+            Write-Verbose "[INFO] Applying filters via Get-LogEntries..."
 
             $filterParams = @{
                 Path           = $Path
@@ -89,11 +89,45 @@ function Invoke-SmartAnalyzer {
             $logEntries = Get-LogEntries @filterParams
         }
 
-        Write-Verbose "📊 Generating summary..."
-        $summary = Get-LogSummary -LogLines $logEntries
+        Write-Verbose "[INFO] Generating summary..."
+        # Ensure we have valid log entries before calling Get-LogSummary
+        # Handle cases where filtering (AttentionOnly, Redact, etc.) may result in empty collections
+        $validLogEntries = @($logEntries | Where-Object { $_ -ne $null })
+        
+        if ($validLogEntries -and $validLogEntries.Count -gt 0) {
+            try {
+                $summary = Get-LogSummary -LogLines $validLogEntries
+            } catch {
+                Write-Warning "Failed to generate log summary: $($_.Exception.Message)"
+                $summary = [PSCustomObject]@{
+                    TotalLines = $validLogEntries.Count
+                    ErrorCount = 0
+                    WarningCount = 0
+                    InfoCount = 0
+                    DebugCount = 0
+                    FatalCount = 0
+                    OtherCount = $validLogEntries.Count
+                    FirstTimestamp = $null
+                    LastTimestamp = $null
+                }
+            }
+        } else {
+            Write-Verbose "No valid log entries found after filtering - creating empty summary"
+            $summary = [PSCustomObject]@{
+                TotalLines = 0
+                ErrorCount = 0
+                WarningCount = 0
+                InfoCount = 0
+                DebugCount = 0
+                FatalCount = 0
+                OtherCount = 0
+                FirstTimestamp = $null
+                LastTimestamp = $null
+            }
+        }
 
         if ($ReportPath -and $PSCmdlet.ShouldProcess($ReportPath, "Export Smart Analyzer Report")) {
-            Write-Verbose "📝 Exporting report to $ReportPath..."
+            Write-Verbose "[INFO] Exporting report to $ReportPath..."
 
             Export-LogReport -Summary $summary `
                              -Entries $logEntries `
@@ -104,7 +138,7 @@ function Invoke-SmartAnalyzer {
                              -IncludeMetadata:$IncludeMetadata `
                              -GenerateRedactionLog:$GenerateRedactionLog
 
-            Write-Host "✅ Report saved to $ReportPath" -ForegroundColor Green
+            Write-Host "[OK] Report saved to $ReportPath" -ForegroundColor Green
         }
 
         return [pscustomobject]@{
@@ -114,6 +148,6 @@ function Invoke-SmartAnalyzer {
     }
     catch {
         Write-Error $_.Exception.Message
-        throw "❌ Smart Analyzer failed. See error details above."
+        throw "[ERROR] Smart Analyzer failed. See error details above."
     }
 }
