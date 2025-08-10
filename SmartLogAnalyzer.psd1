@@ -1,6 +1,6 @@
 @{
     RootModule        = 'SmartLogAnalyzer.psm1'
-    ModuleVersion     = '1.2.0'
+    ModuleVersion     = '1.2.1'
     GUID              = '9f0f09d3-b15c-4a9c-b01d-3d19d06e6f21'
     Author            = 'Willie Bonner'
     CompanyName       = 'Independent'
@@ -43,7 +43,7 @@
                 'cross-platform', 'PowerShell', 'ETL', 'journalctl',
                 'GUI', 'colorize', 'attention', 'cybersecurity'
             )
-            ProjectUri   = 'https://github.com/williebonnerjr/SLAnalyzer'
+            ProjectUri   = 'https://github.com/Dream-Hoarder/SLAnalyzer'
             LicenseUri   = 'https://opensource.org/licenses/MIT'
             IconUri      = 'https://raw.githubusercontent.com/williebonnerjr/SLAnalyzer/main/GUI/Assets/slanalyzer.ico'
             ReleaseNotes = @'
