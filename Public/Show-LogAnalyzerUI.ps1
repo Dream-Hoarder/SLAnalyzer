@@ -8,7 +8,7 @@ function Show-LogAnalyzerUI {
     } else {
         $env:OS -eq 'Windows_NT'
     }
-    
+
     if (-not $isWindowsOS) {
         throw "[ERROR] The Smart Log Analyzer UI is only supported on Windows."
     }
@@ -44,28 +44,86 @@ function Show-LogAnalyzerUI {
     }
 
     function Export-LogDataToFile {
-        param (
-            [string]$Format,
-            [scriptblock]$ExportBlock,
-            [string]$Filter,
-            [string]$Extension
-        )
-        if (-not $script:logData -or $script:logData.Count -eq 0) {
-            [Windows.Forms.MessageBox]::Show("No log data to export.", "Information", 'OK', 'Information')
-            return
-        }
-        $save = New-Object Windows.Forms.SaveFileDialog
-        $save.Filter = $Filter
-        $save.FileName = "LogExport_$(Get-Date -Format 'yyyyMMdd_HHmmss').$Extension"
-        if ($save.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) {
-            try {
-                & $ExportBlock $save.FileName
-                [Windows.Forms.MessageBox]::Show("Exported to $Format successfully.", "Export Complete", 'OK', 'Information')
-            } catch {
-                [Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", "Export Error", 'OK', 'Error')
+    param (
+        [string]$Format,
+        [scriptblock]$ExportBlock,
+        [string]$Filter,
+        [string]$Extension
+    )
+
+    if (-not $script:logData -or $script:logData.Count -eq 0) {
+        [Windows.Forms.MessageBox]::Show("No log data to export.", "Information", 'OK', 'Information')
+        return
+    }
+
+    $save = New-Object Windows.Forms.SaveFileDialog
+    $save.Filter = $Filter
+    $save.FileName = "LogExport_$(Get-Date -Format 'yyyyMMdd_HHmmss').$Extension"
+
+    if ($save.ShowDialog() -eq [Windows.Forms.DialogResult]::OK) {
+        try {
+            # 1️⃣ Export normally via the provided scriptblock
+            & $ExportBlock $save.FileName
+
+            # 2️⃣ Compute hash for integrity
+            if ($Format -eq "CSV") {
+                # Read CSV content without any hash lines
+                $content = Get-Content -Path $save.FileName | Where-Object { $_ -notmatch '^#HASH:' }
+
+                # Compute SHA256 hash of CSV content
+                $hash = [System.BitConverter]::ToString(
+                    (New-Object System.Security.Cryptography.SHA256Managed).ComputeHash(
+                        [System.Text.Encoding]::UTF8.GetBytes(($content -join "`n"))
+                    )
+                ) -replace '-', ''
+
+                # Prepend the hash line at the top
+                $finalContent = @("#HASH:$hash") + $content
+                Set-Content -Path $save.FileName -Value $finalContent
+
+                # ✅ Optional: Verify immediately after writing
+                $verifyContent = Get-Content -Path $save.FileName | Select-Object -Skip 1
+                $verifyHash = [System.BitConverter]::ToString(
+                    (New-Object System.Security.Cryptography.SHA256Managed).ComputeHash(
+                        [System.Text.Encoding]::UTF8.GetBytes(($verifyContent -join "`n"))
+                    )
+                ) -replace '-', ''
+
+                if ($verifyHash -ne $hash) {
+                    [Windows.Forms.MessageBox]::Show("⚠ Warning: Hash verification failed!", "Integrity Check", 'OK', 'Warning')
+                } else {
+                    Write-Host "[DEBUG] Hash verified successfully for $($save.FileName)"
+                }
+
+            } elseif ($Format -eq "JSON") {
+                # Read raw JSON data
+                $dataJson = Get-Content -Path $save.FileName -Raw
+
+                # Compute SHA256 of JSON string
+                $hash = [System.BitConverter]::ToString(
+                    (New-Object System.Security.Cryptography.SHA256Managed).ComputeHash(
+                        [System.Text.Encoding]::UTF8.GetBytes($dataJson)
+                    )
+                ) -replace '-', ''
+
+                # Wrap JSON in object with embedded hash
+                $finalJson = @{
+                    Data = $script:logData
+                    Hash = $hash
+                } | ConvertTo-Json -Depth 5
+
+                # Overwrite the file
+                Set-Content -Path $save.FileName -Value $finalJson
             }
+
+            [Windows.Forms.MessageBox]::Show("Exported to $Format successfully with embedded hash.", "Export Complete", 'OK', 'Information')
+        } catch {
+            [Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", "Export Error", 'OK', 'Error')
         }
     }
+}
+
+
 
     # --- Initialize Script Variables ---
     $script:logData = @()
@@ -73,61 +131,106 @@ function Show-LogAnalyzerUI {
 
     # --- Form Setup ---
     $form = New-Object Windows.Forms.Form
-    $form.Text = "Smart Log Analyzer"
-    $form.Size = New-Object Drawing.Size(1000, 820)
+    $form.Text = "Smart Log Analyzer - Enhanced Multi-Function UI"
+    $form.Size = New-Object Drawing.Size(1200, 850)
     $form.StartPosition = "CenterScreen"
-    $form.MinimumSize = New-Object Drawing.Size(800, 600)
+    $form.MinimumSize = New-Object Drawing.Size(1000, 700)
     $form.FormBorderStyle = [Windows.Forms.FormBorderStyle]::Sizable
 
-    # --- Controls ---
-    $lblLogType = New-Label "Log Type:" 10 10 60
+    # --- Create TabControl ---
+    $tabControl = New-Object Windows.Forms.TabControl
+    $tabControl.Location = New-Object Drawing.Point(5, 5)
+    $tabControl.Size = New-Object Drawing.Size(1180, 800)
+    $tabControl.Anchor = 'Top,Left,Right,Bottom'
+
+    # --- Create Tab Pages ---
+    $tabEventLogs = New-Object Windows.Forms.TabPage
+    $tabEventLogs.Text = "Event Log Analysis"
+
+    $tabFileAnalysis = New-Object Windows.Forms.TabPage
+    $tabFileAnalysis.Text = "Log File Analysis"
+
+    $tabUtilities = New-Object Windows.Forms.TabPage
+    $tabUtilities.Text = "Utilities"
+
+    $tabControl.TabPages.AddRange(@($tabEventLogs, $tabFileAnalysis, $tabUtilities))
+
+    # =============================================================================
+    # TAB 1: EVENT LOG ANALYSIS (using Invoke-SmartAnalyzer + Get-SystemLogs)
+    # =============================================================================
+
+    # --- Event Logs Tab Controls ---
+    $lblLogType = New-Label "Log Type:" 10 20 60
     $cmbLogType = New-Object Windows.Forms.ComboBox
-    $cmbLogType.Location = New-Object Drawing.Point(75, 10)
+    $cmbLogType.Location = New-Object Drawing.Point(75, 20)
     $cmbLogType.Size = New-Object Drawing.Size(120, 20)
     $cmbLogType.DropDownStyle = 'DropDownList'
     $cmbLogType.Items.AddRange(@("System", "Application", "Security", "All"))
     $cmbLogType.SelectedIndex = 0
 
-    $lblStartTime = New-Label "Start Time:" 210 10 70
+    $lblStartTime = New-Label "Start Time:" 210 20 70
     $dtStart = New-Object Windows.Forms.DateTimePicker
     $dtStart.Format = 'Custom'
     $dtStart.CustomFormat = "yyyy-MM-dd HH:mm"
-    $dtStart.Location = New-Object Drawing.Point(280, 10)
+    $dtStart.Location = New-Object Drawing.Point(280, 20)
     $dtStart.Size = New-Object Drawing.Size(140, 20)
-    $dtStart.Value = (Get-Date).AddHours(-1)
+    # Set minimum date to 6 months ago to support historical log analysis
+    $dtStart.MinDate = (Get-Date).AddMonths(-6)
+    $dtStart.MaxDate = Get-Date
+    # Default to 24 hours ago for reasonable performance, but allow user to go back 6 months
+    $dtStart.Value = (Get-Date).AddDays(-1)
 
-    $lblEndTime = New-Label "End Time:" 430 10 65
+    $lblEndTime = New-Label "End Time:" 430 20 65
     $dtEnd = New-Object Windows.Forms.DateTimePicker
     $dtEnd.Format = 'Custom'
     $dtEnd.CustomFormat = "yyyy-MM-dd HH:mm"
-    $dtEnd.Location = New-Object Drawing.Point(500, 10)
+    $dtEnd.Location = New-Object Drawing.Point(500, 20)
     $dtEnd.Size = New-Object Drawing.Size(140, 20)
+    # Set date range to support 6 months of historical data
+    $dtEnd.MinDate = (Get-Date).AddMonths(-6)
+    $dtEnd.MaxDate = Get-Date
     $dtEnd.Value = Get-Date
 
     $chkRedact = New-Object Windows.Forms.CheckBox
     $chkRedact.Text = "Redact Sensitive Data"
-    $chkRedact.Location = New-Object Drawing.Point(10, 40)
+    $chkRedact.Location = New-Object Drawing.Point(10, 50)
     $chkRedact.Size = New-Object Drawing.Size(180, 20)
 
     $chkRedactLog = New-Object Windows.Forms.CheckBox
     $chkRedactLog.Text = "Generate Redaction Log"
-    $chkRedactLog.Location = New-Object Drawing.Point(200, 40)
+    $chkRedactLog.Location = New-Object Drawing.Point(200, 50)
     $chkRedactLog.Size = New-Object Drawing.Size(180, 20)
-    
+
     $chkAttentionOnly = New-Object Windows.Forms.CheckBox
     $chkAttentionOnly.Text = "Show Critical Events Only"
-    $chkAttentionOnly.Location = New-Object Drawing.Point(10, 65)
+    $chkAttentionOnly.Location = New-Object Drawing.Point(10, 75)
     $chkAttentionOnly.Size = New-Object Drawing.Size(180, 20)
     $chkAttentionOnly.Checked = $false  # Default to showing all events
 
-    $btnFetch = New-Button "Fetch & Analyze Logs" 400 65 150
-    $btnExportCSV = New-Button "Export to CSV" 560 40 80
-    $btnExportJSON = New-Button "Export to JSON" 650 40 80
-    $btnExportReport = New-Button "Export Log Report" 740 40 110
+    # Add time range preset buttons
+    $lblPresets = New-Label "Quick Time Ranges:" 660 20 120
+    $btn1Hour = New-Button "1h" 660 45 35 25
+    $btn24Hours = New-Button "24h" 700 45 35 25
+    $btn7Days = New-Button "7d" 740 45 35 25
+    $btn30Days = New-Button "30d" 780 45 35 25
+    $btn6Months = New-Button "6mo" 820 45 35 25
+
+    # Add informational label about extended date range
+    $lblInfo = New-Object Windows.Forms.Label
+    $lblInfo.Text = "💡 Can analyze logs up to 6 months back (large ranges may take longer)"
+    $lblInfo.Location = New-Object Drawing.Point(680, 75)
+    $lblInfo.Size = New-Object Drawing.Size(300, 20)
+    $lblInfo.ForeColor = [Drawing.Color]::DarkBlue
+    $lblInfo.Font = New-Object Drawing.Font("Arial", 8, [Drawing.FontStyle]::Italic)
+
+    $btnFetch = New-Button "Fetch & Analyze Logs" 200 75 150 30
+    $btnExportCSV = New-Button "Export to CSV" 360 75 90 30
+    $btnExportJSON = New-Button "Export to JSON" 460 75 90 30
+    $btnExportReport = New-Button "Export Log Report" 560 75 110 30
 
     $grid = New-Object Windows.Forms.DataGridView
-    $grid.Location = New-Object Drawing.Point(10, 100)
-    $grid.Size = New-Object Drawing.Size(960, 580)
+    $grid.Location = New-Object Drawing.Point(10, 110)
+    $grid.Size = New-Object Drawing.Size(1140, 550)
     $grid.Anchor = 'Top,Left,Right,Bottom'
     $grid.ReadOnly = $true
     $grid.AutoGenerateColumns = $true  # Let it auto-generate initially
@@ -137,11 +240,133 @@ function Show-LogAnalyzerUI {
     $grid.SelectionMode = 'FullRowSelect'
     $grid.MultiSelect = $false
 
-    $lblSummary = New-Label "Summary will appear here..." 10 690 960 60
+    $lblSummary = New-Label "Summary will appear here..." 10 670 1140 50
     $lblSummary.AutoSize = $false
     $lblSummary.Anchor = 'Left,Right,Bottom'
 
+    # Add all Event Logs controls to the tab
+    $tabEventLogs.Controls.AddRange(@(
+        $lblLogType, $cmbLogType, $lblStartTime, $dtStart, $lblEndTime, $dtEnd,
+        $lblPresets, $btn1Hour, $btn24Hours, $btn7Days, $btn30Days, $btn6Months, $lblInfo,
+        $chkRedact, $chkRedactLog, $chkAttentionOnly,
+        $btnFetch, $btnExportCSV, $btnExportJSON, $btnExportReport,
+        $grid, $lblSummary
+    ))
+
+    # =============================================================================
+    # TAB 2: LOG FILE ANALYSIS (using Get-LogEntries)
+    # =============================================================================
+
+    # --- File Analysis Tab Controls ---
+    $lblFilePath = New-Label "Log File Path:" 10 20 100
+    $txtFilePath = New-Object Windows.Forms.TextBox
+    $txtFilePath.Location = New-Object Drawing.Point(120, 20)
+    $txtFilePath.Size = New-Object Drawing.Size(400, 20)
+
+    $btnBrowseFile = New-Button "Browse..." 530 18 80 25
+    $btnAnalyzeFile = New-Button "Analyze File" 620 18 100 25
+
+    # Advanced filtering options for Get-LogEntries
+    $lblIncludeKeywords = New-Label "Include Keywords (comma-separated):" 10 55 200
+    $txtIncludeKeywords = New-Object Windows.Forms.TextBox
+    $txtIncludeKeywords.Location = New-Object Drawing.Point(220, 55)
+    $txtIncludeKeywords.Size = New-Object Drawing.Size(300, 20)
+
+    $lblExcludeKeywords = New-Label "Exclude Keywords (comma-separated):" 10 85 200
+    $txtExcludeKeywords = New-Object Windows.Forms.TextBox
+    $txtExcludeKeywords.Location = New-Object Drawing.Point(220, 85)
+    $txtExcludeKeywords.Size = New-Object Drawing.Size(300, 20)
+
+    $lblEventIds = New-Label "Event IDs (comma-separated):" 530 55 150
+    $txtEventIds = New-Object Windows.Forms.TextBox
+    $txtEventIds.Location = New-Object Drawing.Point(690, 55)
+    $txtEventIds.Size = New-Object Drawing.Size(200, 20)
+
+    $lblProviderNames = New-Label "Provider Names (comma-separated):" 530 85 150
+    $txtProviderNames = New-Object Windows.Forms.TextBox
+    $txtProviderNames.Location = New-Object Drawing.Point(690, 85)
+    $txtProviderNames.Size = New-Object Drawing.Size(200, 20)
+
+    # File analysis options
+    $chkFileRedact = New-Object Windows.Forms.CheckBox
+    $chkFileRedact.Text = "Redact Sensitive Data"
+    $chkFileRedact.Location = New-Object Drawing.Point(10, 115)
+    $chkFileRedact.Size = New-Object Drawing.Size(150, 20)
+
+    $chkFileColorize = New-Object Windows.Forms.CheckBox
+    $chkFileColorize.Text = "Colorize Output"
+    $chkFileColorize.Location = New-Object Drawing.Point(170, 115)
+    $chkFileColorize.Size = New-Object Drawing.Size(120, 20)
+
+    $lblSortOrder = New-Label "Sort Order:" 300 115 80
+    $cmbSortOrder = New-Object Windows.Forms.ComboBox
+    $cmbSortOrder.Location = New-Object Drawing.Point(390, 115)
+    $cmbSortOrder.Size = New-Object Drawing.Size(100, 20)
+    $cmbSortOrder.DropDownStyle = 'DropDownList'
+    $cmbSortOrder.Items.AddRange(@("Forward", "Reverse"))
+    $cmbSortOrder.SelectedIndex = 0
+
+    $lblLineLimit = New-Label "Line Limit:" 500 115 70
+    $numLineLimit = New-Object Windows.Forms.NumericUpDown
+    $numLineLimit.Location = New-Object Drawing.Point(580, 115)
+    $numLineLimit.Size = New-Object Drawing.Size(80, 20)
+    $numLineLimit.Minimum = 0
+    $numLineLimit.Maximum = 100000
+    $numLineLimit.Value = 1000
+
+    # File analysis grid and summary
+    $gridFile = New-Object Windows.Forms.DataGridView
+    $gridFile.Location = New-Object Drawing.Point(10, 150)
+    $gridFile.Size = New-Object Drawing.Size(1140, 500)
+    $gridFile.Anchor = 'Top,Left,Right,Bottom'
+    $gridFile.ReadOnly = $true
+    $gridFile.AutoGenerateColumns = $true
+    $gridFile.AutoSizeColumnsMode = 'Fill'
+    $gridFile.AllowUserToAddRows = $false
+    $gridFile.AllowUserToDeleteRows = $false
+    $gridFile.SelectionMode = 'FullRowSelect'
+    $gridFile.MultiSelect = $false
+
+    $lblFileSummary = New-Label "File analysis summary will appear here..." 10 660 1140 50
+    $lblFileSummary.AutoSize = $false
+    $lblFileSummary.Anchor = 'Left,Right,Bottom'
+
+    # Add all File Analysis controls to the tab
+    $tabFileAnalysis.Controls.AddRange(@(
+        $lblFilePath, $txtFilePath, $btnBrowseFile, $btnAnalyzeFile,
+        $lblIncludeKeywords, $txtIncludeKeywords, $lblExcludeKeywords, $txtExcludeKeywords,
+        $lblEventIds, $txtEventIds, $lblProviderNames, $txtProviderNames,
+        $chkFileRedact, $chkFileColorize, $lblSortOrder, $cmbSortOrder, $lblLineLimit, $numLineLimit,
+        $gridFile, $lblFileSummary
+    ))
+
     # --- Event Handlers ---
+
+    # Time range preset button handlers
+    $btn1Hour.Add_Click({
+        $dtStart.Value = (Get-Date).AddHours(-1)
+        $dtEnd.Value = Get-Date
+    })
+
+    $btn24Hours.Add_Click({
+        $dtStart.Value = (Get-Date).AddDays(-1)
+        $dtEnd.Value = Get-Date
+    })
+
+    $btn7Days.Add_Click({
+        $dtStart.Value = (Get-Date).AddDays(-7)
+        $dtEnd.Value = Get-Date
+    })
+
+    $btn30Days.Add_Click({
+        $dtStart.Value = (Get-Date).AddDays(-30)
+        $dtEnd.Value = Get-Date
+    })
+
+    $btn6Months.Add_Click({
+        $dtStart.Value = (Get-Date).AddMonths(-6)
+        $dtEnd.Value = Get-Date
+    })
     $cellFormatEvent = Register-ObjectEvent -InputObject $grid -EventName CellFormatting -Action {
         try {
             if ($eventArgs.RowIndex -ge 0 -and $eventArgs.ColumnIndex -ge 0 -and $this.Rows -and $this.Rows.Count -gt $eventArgs.RowIndex) {
@@ -156,7 +381,7 @@ function Show-LogAnalyzerUI {
                             break
                         }
                     }
-                    
+
                     if ($levelCell -and $levelCell.Value) {
                         $level = $levelCell.Value.ToString()
                         $eventArgs.CellStyle.BackColor = switch ($level) {
@@ -180,7 +405,7 @@ function Show-LogAnalyzerUI {
         try {
             if ($e.RowIndex -ge 0 -and $e.RowIndex -lt $script:rawLogEntries.Count) {
                 $selectedEntry = $script:rawLogEntries[$e.RowIndex]
-                
+
                 # Create a detail dialog
                 $detailForm = New-Object Windows.Forms.Form
                 $detailForm.Text = "Log Entry Details"
@@ -188,7 +413,7 @@ function Show-LogAnalyzerUI {
                 $detailForm.StartPosition = "CenterParent"
                 $detailForm.FormBorderStyle = [Windows.Forms.FormBorderStyle]::Sizable
                 $detailForm.MinimumSize = New-Object Drawing.Size(600, 400)
-                
+
                 # Create a textbox for the full message
                 $txtDetails = New-Object Windows.Forms.TextBox
                 $txtDetails.Location = New-Object Drawing.Point(10, 10)
@@ -199,7 +424,7 @@ function Show-LogAnalyzerUI {
                 $txtDetails.ScrollBars = 'Both'
                 $txtDetails.WordWrap = $true
                 $txtDetails.Font = New-Object Drawing.Font("Consolas", 10)
-                
+
                 # Format the details
                 $detailText = @"
 Timestamp: $($selectedEntry.TimeCreated)
@@ -211,14 +436,14 @@ Event ID: $($selectedEntry.EventId)
 $($selectedEntry.Message)
 
 "@
-                
+
                 # Add raw message if available and different
                 if ($selectedEntry.PSObject.Properties['RawMessage'] -and $selectedEntry.RawMessage -and $selectedEntry.RawMessage -ne $selectedEntry.Message) {
                     $detailText += "`n=== Raw XML Message ===`n$($selectedEntry.RawMessage)"
                 }
-                
+
                 $txtDetails.Text = $detailText
-                
+
                 # Add close button
                 $btnClose = New-Object Windows.Forms.Button
                 $btnClose.Text = "Close"
@@ -226,14 +451,14 @@ $($selectedEntry.Message)
                 $btnClose.Size = New-Object Drawing.Size(75, 25)
                 $btnClose.Anchor = 'Bottom,Right'
                 $btnClose.Add_Click({ $detailForm.Close() })
-                
+
                 $detailForm.Controls.AddRange(@($txtDetails, $btnClose))
                 $detailForm.Add_KeyDown({
                     if ($_.KeyCode -eq 'Escape') {
                         $detailForm.Close()
                     }
                 })
-                
+
                 [void]$detailForm.ShowDialog($form)
                 $detailForm.Dispose()
             }
@@ -245,14 +470,14 @@ $($selectedEntry.Message)
     $btnFetch.Add_Click({
         try {
             Write-Host "[DEBUG] Starting log fetch with LogType: $($cmbLogType.SelectedItem)"
-            
+
             # Clear previous data
             $script:logData = @()
             $script:rawLogEntries = @()
             $grid.DataSource = $null
             $grid.Columns.Clear()
             $lblSummary.Text = "Fetching logs..."
-            
+
             $params = @{
                 FetchLogs = $true
                 LogType = $cmbLogType.SelectedItem.ToString()
@@ -266,7 +491,7 @@ $($selectedEntry.Message)
 
             Write-Host "[DEBUG] Calling Invoke-SmartAnalyzer with params: $($params | ConvertTo-Json -Compress)"
             $result = Invoke-SmartAnalyzer @params -ErrorAction Stop
-            
+
             if (-not $result -or -not $result.Entries) {
                 Write-Warning "[DEBUG] No result or entries returned from Invoke-SmartAnalyzer"
                 $lblSummary.Text = "No log entries found for the specified criteria."
@@ -293,12 +518,12 @@ $($selectedEntry.Message)
                     Message   = if ($_.Message) { $_.Message.Substring(0, [Math]::Min($_.Message.Length, 500)) } else { "No message" }
                 }
             }
-            
+
             Write-Host "[DEBUG] Transformed $($script:logData.Count) entries for display"
 
             # Convert to DataTable for proper DataGridView binding
             Write-Host "[DEBUG] Sample data for binding:" ($script:logData | Select-Object -First 1 | ConvertTo-Json -Compress)
-            
+
             # Create DataTable
             $dataTable = New-Object System.Data.DataTable
             $dataTable.Columns.Add("Timestamp", [string]) | Out-Null
@@ -306,7 +531,7 @@ $($selectedEntry.Message)
             $dataTable.Columns.Add("Provider", [string]) | Out-Null
             $dataTable.Columns.Add("EventId", [string]) | Out-Null
             $dataTable.Columns.Add("Message", [string]) | Out-Null
-            
+
             # Populate DataTable
             foreach ($entry in $script:logData) {
                 $row = $dataTable.NewRow()
@@ -317,11 +542,11 @@ $($selectedEntry.Message)
                 $row["Message"] = $entry.Message
                 $dataTable.Rows.Add($row)
             }
-            
+
             # Bind DataTable to grid
             $grid.AutoGenerateColumns = $true
             $grid.DataSource = $dataTable
-            
+
             # Adjust column widths
             if ($grid.ColumnCount -gt 0) {
                 $grid.Columns["Timestamp"].Width = 130
@@ -330,13 +555,13 @@ $($selectedEntry.Message)
                 $grid.Columns["EventId"].Width = 80
                 $grid.Columns["Message"].AutoSizeMode = 'Fill'
             }
-            
+
             Write-Host "[DEBUG] Grid now has $($grid.RowCount) rows and $($grid.ColumnCount) columns"
 
             # Generate summary
             Write-Host "[DEBUG] Generating summary for $($result.Entries.Count) entries"
             $summary = Get-LogSummary -LogLines $result.Entries -ErrorAction Stop
-            
+
             if ($summary) {
                 $firstTs = if ($summary.FirstTimestamp) { $summary.FirstTimestamp.ToString("yyyy-MM-dd HH:mm:ss") } else { "Unknown" }
                 $lastTs = if ($summary.LastTimestamp) { $summary.LastTimestamp.ToString("yyyy-MM-dd HH:mm:ss") } else { "Unknown" }
@@ -344,7 +569,7 @@ $($selectedEntry.Message)
             } else {
                 $lblSummary.Text = "Summary generation failed"
             }
-            
+
             Write-Host "[DEBUG] Log fetch completed successfully"
         } catch {
             Write-Host "[DEBUG] Error in btnFetch.Add_Click: $($_.Exception.Message)"
@@ -389,11 +614,14 @@ $($selectedEntry.Message)
         try {
             $formWidth = $form.ClientSize.Width
             $formHeight = $form.ClientSize.Height
-            
-            # Adjust grid size and summary position
+
+            # Adjust grid size and summary position for dynamic form resizing
             $grid.Size = New-Object Drawing.Size(($formWidth - 20), ($formHeight - 170))
             $lblSummary.Location = New-Object Drawing.Point(10, ($formHeight - 80))
             $lblSummary.Size = New-Object Drawing.Size(($formWidth - 20), 60)
+
+            # Adjust info label position for dynamic form resizing
+            $lblInfo.Location = New-Object Drawing.Point(([Math]::Max(680, $formWidth - 400)), 65)
         } catch {
             # Suppress resize errors
         }
@@ -403,6 +631,7 @@ $($selectedEntry.Message)
         $lblLogType, $cmbLogType,
         $lblStartTime, $dtStart,
         $lblEndTime, $dtEnd,
+        $lblPresets, $btn1Hour, $btn24Hours, $btn7Days, $btn30Days, $btn6Months, $lblInfo,
         $chkRedact, $chkRedactLog, $chkAttentionOnly,
         $btnFetch, $btnExportCSV, $btnExportJSON, $btnExportReport,
         $grid, $lblSummary

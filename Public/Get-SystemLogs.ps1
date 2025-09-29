@@ -182,8 +182,9 @@ function Get-SystemLogs {
                             $month = $matches['month']
                             $day   = [int]$matches['day']
                             $time  = $matches['time']
-                            $year  = (Get-Date).Year
-                            [datetime]::ParseExact("$month $day $year $time", "MMM d yyyy HH:mm:ss", $null)
+                            $timestampString = "$month $day $time"
+                            $result = Convert-Timestamp -TimestampString $timestampString
+                            if ($result) { $result } else { Get-Date }
                         } else {
                             Get-Date
                         }

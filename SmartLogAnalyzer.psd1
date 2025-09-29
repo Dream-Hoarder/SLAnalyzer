@@ -1,6 +1,6 @@
 @{
     RootModule        = 'SmartLogAnalyzer.psm1'
-    ModuleVersion     = '1.2.1'
+    ModuleVersion     = '1.3.1'
     GUID              = '9f0f09d3-b15c-4a9c-b01d-3d19d06e6f21'
     Author            = 'Willie Bonner'
     CompanyName       = 'Independent'
@@ -13,6 +13,7 @@
         'Get-LogSummary',
         'Invoke-SmartAnalyzer',
         'Get-SystemLogs',
+        'Convert-Timestamp',
         'Show-LogAnalyzerUI' # Loaded conditionally on Windows, but safe to export
     )
 
@@ -23,6 +24,7 @@
         'Public\Invoke-SmartAnalyzer.ps1',
         'Public\Show-LogAnalyzerUI.ps1',
         'Public\Get-SystemLogs.ps1',
+        'Public\Convert-Timestamp.ps1',
         'Private\Analyzers.Helper.ps1',
         'Private\Protect-LogEntry.ps1',
         'Private\Convert-Timestamp.ps1',

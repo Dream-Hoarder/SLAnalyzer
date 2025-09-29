@@ -131,7 +131,7 @@ C:.
 ---
 
 ## 📄 License
-MIT License. See LICENSE for details.
+Custom License. See LICENSE for details.
 
 ---
 

@@ -241,12 +241,7 @@ function Format-LogEntry {
     # --- SmartLogAnalyzer Default ---
     if ($Line -match '^(?<Time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(?<Level>[^\]]+)\] (?<Provider>[^:]+): (?<Message>.+)$') {
         if ($matches) {
-            $timestamp = $null
-            try {
-                [datetime]::TryParseExact($matches['Time'], 'yyyy-MM-dd HH:mm:ss', $null, 'None', [ref]$timestamp) | Out-Null
-            } catch {
-                $timestamp = $null
-            }
+            $timestamp = Convert-Timestamp -TimestampString $matches['Time']
 
             $level = $matches['Level']
             $provider = $matches['Provider']
@@ -268,14 +263,8 @@ function Format-LogEntry {
     # --- Syslog-like ---
     if ($Line -match '^(?<Month>\w{3}) +(?<Day>\d{1,2}) (?<Time>\d{2}:\d{2}:\d{2}) (?<Host>\S+) (?<Source>[^:]+): (?<Message>.+)$') {
         if ($matches) {
-            $timestamp = $null
-            try {
-                $year = (Get-Date).Year
-                $datetime = "$($matches['Month']) $($matches['Day']) $year $($matches['Time'])"
-                [datetime]::TryParseExact($datetime, 'MMM dd yyyy HH:mm:ss', $null, 'None', [ref]$timestamp) | Out-Null
-            } catch {
-                $timestamp = $null
-            }
+            $timestampString = "$($matches['Month']) $($matches['Day']) $($matches['Time'])"
+            $timestamp = Convert-Timestamp -TimestampString $timestampString
 
             $level = 'Info'
             $provider = $matches['Source']

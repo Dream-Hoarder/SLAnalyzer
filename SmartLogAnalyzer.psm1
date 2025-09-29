@@ -14,6 +14,7 @@
 . "$PSScriptRoot\Public\Get-LogSummary.ps1"
 . "$PSScriptRoot\Public\Invoke-SmartAnalyzer.ps1"
 . "$PSScriptRoot\Public\Get-SystemLogs.ps1"
+. "$PSScriptRoot\Public\Convert-Timestamp.ps1"
 
 # --- Conditionally load Windows UI ---
 # Compatible with both PowerShell 5.1 and 7+
@@ -32,7 +33,8 @@ $exportedFunctions = @(
     'Get-LogEntries',
     'Get-LogSummary',
     'Invoke-SmartAnalyzer',
-    'Get-SystemLogs'
+    'Get-SystemLogs',
+    'Convert-Timestamp'
 )
 
 # Export Show-LogAnalyzerUI only on Windows

@@ -19,14 +19,7 @@ function Get-LogSummary {
             LastTimestamp  = $null
         }
 
-        $datetimeFormats = @(
-            'yyyy-MM-dd HH:mm:ss',
-            'yyyy-MM-ddTHH:mm:ss',
-            'yyyy-MM-ddTHH:mm:ssZ',
-            'yyyy-MM-ddTHH:mm:ss.fffZ',
-            'yyyy-MM-ddTHH:mm:sszzz',
-            'MMM dd yyyy HH:mm:ss'
-        )
+        # Convert-Timestamp function handles all datetime format parsing
     }
 
     process {
@@ -82,19 +75,14 @@ function Get-LogSummary {
 
                 if ($entry -match '(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?(?:Z|[\+\-]\d{2}:\d{2})?)') {
                     $timestampCandidate = $matches[1]
-
-                    foreach ($fmt in $datetimeFormats) {
-                        try {
-                            $parsed = [datetime]::ParseExact($timestampCandidate, $fmt, $null)
-                            if (-not $summary.FirstTimestamp -or $parsed -lt $summary.FirstTimestamp) {
-                                $summary.FirstTimestamp = $parsed
-                            }
-                            if (-not $summary.LastTimestamp -or $parsed -gt $summary.LastTimestamp) {
-                                $summary.LastTimestamp = $parsed
-                            }
-                            break
-                        } catch {
-                            continue
+                    
+                    $parsed = Convert-Timestamp -TimestampString $timestampCandidate
+                    if ($parsed) {
+                        if (-not $summary.FirstTimestamp -or $parsed -lt $summary.FirstTimestamp) {
+                            $summary.FirstTimestamp = $parsed
+                        }
+                        if (-not $summary.LastTimestamp -or $parsed -gt $summary.LastTimestamp) {
+                            $summary.LastTimestamp = $parsed
                         }
                     }
                 }
