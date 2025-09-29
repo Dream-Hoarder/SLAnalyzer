@@ -141,5 +141,8 @@ Created by Willie Bonner — Independent Developer & System Automation Enthusias
 ---
 
 ## 🌐 Links
-📦 PowerShell Gallery: Coming Soon
+📦 PowerShell Gallery: Update Coming Soon
 🐙 GitHub: https://github.com/williebonnerjr/SLAnalyzer
+
+
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/Dream-Hoarder/SLAnalyzer?utm_source=oss&utm_medium=github&utm_campaign=Dream-Hoarder%2FSLAnalyzer&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
